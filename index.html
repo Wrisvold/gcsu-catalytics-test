@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <meta name="robots" content="noindex, nofollow">
+  <title>GCSU Catalytics (test version)</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.9.1/build/stlite.css">
+  <style>
+    #loading { font: 16px/1.5 system-ui, sans-serif; color: #0B2545; max-width: 560px; margin: 15vh auto; padding: 0 16px; }
+    #loading b { display: block; font-size: 22px; margin-bottom: 6px; }
+  </style>
+</head>
+<body>
+  <div id="loading"><b>GCSU Catalytics, test version</b>Loading Python in your browser. The first visit takes
+    about a minute; after that it's faster. Your TrackMan file never leaves this computer.</div>
+  <div id="root"></div>
+  <script type="module">
+    import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.9.1/build/stlite.js";
+    document.getElementById("loading").remove();
+    mount({
+  "entrypoint": "app.py",
+  "requirements": [
+    "pandas",
+    "matplotlib",
+    "reportlab",
+    "sqlite3"
+  ],
+  "files": {
+    "app.py": {
+      "url": "./app/app.py"
+    },
+    "config.py": {
+      "url": "./app/config.py"
+    },
+    "db.py": {
+      "url": "./app/db.py"
+    },
+    "ingest.py": {
+      "url": "./app/ingest.py"
+    },
+    "metrics/__init__.py": {
+      "url": "./app/metrics/__init__.py"
+    },
+    "metrics/common.py": {
+      "url": "./app/metrics/common.py"
+    },
+    "metrics/pitching.py": {
+      "url": "./app/metrics/pitching.py"
+    },
+    "metrics/hitting.py": {
+      "url": "./app/metrics/hitting.py"
+    },
+    "reports/__init__.py": {
+      "url": "./app/reports/__init__.py"
+    },
+    "reports/context.py": {
+      "url": "./app/reports/context.py"
+    },
+    "reports/pitcher.py": {
+      "url": "./app/reports/pitcher.py"
+    },
+    "reports/hitter.py": {
+      "url": "./app/reports/hitter.py"
+    },
+    "reports/tables.py": {
+      "url": "./app/reports/tables.py"
+    },
+    "reports/pdf.py": {
+      "url": "./app/reports/pdf.py"
+    },
+    "charts/__init__.py": {
+      "url": "./app/charts/__init__.py"
+    },
+    "charts/base.py": {
+      "url": "./app/charts/base.py"
+    },
+    "charts/zone.py": {
+      "url": "./app/charts/zone.py"
+    },
+    "charts/pitching.py": {
+      "url": "./app/charts/pitching.py"
+    },
+    "charts/hitting.py": {
+      "url": "./app/charts/hitting.py"
+    },
+    "ui/__init__.py": {
+      "url": "./app/ui/__init__.py"
+    },
+    "ui/common.py": {
+      "url": "./app/ui/common.py"
+    },
+    "ui/games_page.py": {
+      "url": "./app/ui/games_page.py"
+    },
+    "ui/pitcher_page.py": {
+      "url": "./app/ui/pitcher_page.py"
+    },
+    "ui/hitter_page.py": {
+      "url": "./app/ui/hitter_page.py"
+    },
+    "ui/corrections_page.py": {
+      "url": "./app/ui/corrections_page.py"
+    },
+    "DEMO_MODE": {
+      "url": "./app/DEMO_MODE"
+    }
+  },
+  "streamlitConfig": {
+    "theme.base": "light",
+    "theme.primaryColor": "#1B7A3E",
+    "client.toolbarMode": "viewer",
+    "client.showErrorDetails": true,
+    "browser.gatherUsageStats": false
+  }
+}, document.getElementById("root"));
+  </script>
+</body>
+</html>
