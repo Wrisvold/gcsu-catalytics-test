@@ -90,7 +90,7 @@ def game_form(conn, g: pd.Series, key: str) -> None:
                     weather[k] != (_num(g[k]) if k != "wind_dir" else g[k]) for k in weather):
                 fields["weather_source"] = f"{source}, edited"
             db.update_game(conn, g["game_id"], fields)
-            st.success("Saved.")
+            st.toast("Game details saved.", icon=":material/check:")  # a toast survives the rerun
             st.rerun()
 
 

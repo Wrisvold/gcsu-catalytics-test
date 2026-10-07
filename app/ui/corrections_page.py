@@ -113,6 +113,10 @@ def render() -> None:
             "IVB": p["InducedVertBreak"].round(1), "HB": p["HorzBreak"].round(1), "TrackMan": p["auto_type"],
             "Now": p["pitch_type"], "Single-pitch override": p["PitchUID"].map(overrides).fillna(""),
         })
+        if config.DEMO_MODE:  # stlite's Streamlit can't run st.data_editor; pick one pitch at a time
+            _single_pitch_picker(conn, table, overrides, pid)
+            _all_rules(rules)
+            return
         edited = st.data_editor(
             table, hide_index=True, key=f"ov-{pid}", disabled=[c for c in table.columns if c != "Single-pitch override"],
             column_config={"PitchUID": None, "Single-pitch override": st.column_config.SelectboxColumn(
@@ -128,7 +132,29 @@ def render() -> None:
                         db.delete_override(conn, uid)
             st.rerun()
 
+    _all_rules(rules)
+
+
+def _all_rules(rules: list[dict]) -> None:
     if rules:
         with st.expander(f"All corrections ({len(rules)})"):
             for r in rules:
                 st.markdown(f"- {_rule_text(r)}")
+
+
+def _single_pitch_picker(conn, table: pd.DataFrame, overrides: dict[str, str], pid: str) -> None:
+    """One pitch at a time: pick it from a list, pick the type, save or remove."""
+    st.dataframe(table.drop(columns=["PitchUID"]), hide_index=True)
+    labels = {r["PitchUID"]: f"{r['Date']} · inning {r['Inning']} · pitch #{r['Pitch #']} · {r['Velo']} mph · "
+                             f"TrackMan {r['TrackMan']} · now {r['Now']}" for r in table.to_dict("records")}
+    c1, c2 = st.columns([3, 2])
+    uid = c1.selectbox("Pitch", list(labels), format_func=labels.get, key=f"ov-pick-{pid}")
+    current = overrides.get(uid, "")
+    new = c2.selectbox("Should be", ["", *CODES], index=(["", *CODES].index(current) if current in CODES else 0),
+                       format_func=lambda c: code_label(c) if c else "(no override)", key=f"ov-type-{pid}-{uid}")
+    if st.button("Save single-pitch change", key=f"ov-save-{pid}"):
+        if new:
+            db.set_override(conn, uid, new)
+        elif current:
+            db.delete_override(conn, uid)
+        st.rerun()
