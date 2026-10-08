@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="robots" content="noindex, nofollow">
+  <title>GCSU Catalytics (test version)</title>
+  <script>
+    // Project sites live under /<repo>/; send the visitor to that folder's start page.
+    var parts = location.pathname.split("/").filter(Boolean);
+    var base = location.hostname.endsWith("github.io") && parts.length ? "/" + parts[0] + "/" : "/";
+    location.replace(base);
+  </script>
+</head>
+<body style="font: 16px system-ui, sans-serif; margin: 15vh auto; max-width: 560px; padding: 0 16px;">
+  Reloading GCSU Catalytics. Refreshing the page clears any files you loaded; open them again on Load Data.
+</body>
+</html>
