@@ -217,16 +217,37 @@ def add_pa_outcomes(df: pd.DataFrame) -> None:
     **At-bat** (rule 15): a PA end that is not BB, IBB, HBP, sacrifice (SF/SH) or catcher's
     interference. Reached on error counts as an at-bat but not a hit.
     **Hit** (rule 16): PlayResult Single, Double, Triple or HomeRun.
-    **Out on the PA** (for Out %): strikeout, or OutsOnPlay > 0 on the PA-ending pitch.
+    **Outs on a pitch** (`outs_on_pitch`): OutsOnPlay, plus one on a strikeout (TrackMan leaves
+    strikeouts out of OutsOnPlay; AUDIT.md section 5).
+    **Out on the PA** (for Out %): strikeout, or an out made on the PA-ending pitch.
+    `apply_official_results` later replaces the outcome and outs with the official ones where known.
     """
     df["outcome"] = pa_outcomes(df)
+    df["outs_on_pitch"] = df["OutsOnPlay"].fillna(0) + (df["pa_end"] & (df["KorBB"] == "Strikeout")).astype(int)
+    _outcome_flags(df)
+
+
+def _outcome_flags(df: pd.DataFrame) -> None:
     o = df["outcome"]
     df["is_ab"] = o.notna() & ~o.isin(NON_AB_CODES)
     df["is_hit"] = o.isin(HIT_CODES)
     df["total_bases"] = o.map(HIT_CODES).fillna(0).astype(int)
     for code in ["K", "BB", "IBB", "HBP", "SF", "SH", "HR", "1B", "2B", "3B", "ROE", "CI"]:
         df[f"is_{code.lower()}"] = o == code
-    df["is_pa_out"] = df["pa_end"] & ((o == "K") | (df["OutsOnPlay"].fillna(0) > 0))
+    df["is_pa_out"] = df["pa_end"] & ((o == "K") | (df["outs_on_pitch"] > 0))
+
+
+def apply_official_results(df: pd.DataFrame) -> None:
+    """Where the official play-by-play matched a PA, its result replaces TrackMan's (coaches, Oct 2026):
+    the outcome code (so hits, at-bats, walks and strikeouts follow the official scoring) and the outs
+    on the PA-ending pitch (so IP and Out % do too). `outcome_tm` keeps TrackMan's outcome and
+    `outcome_changed` marks the PAs where they differ. Pitch-level data (calls, exit velo) is TrackMan's."""
+    df["outcome_tm"] = df["outcome"]
+    official = df["pa_end"] & df["gs_known"] & df["gs_code"].notna()
+    df.loc[official, "outcome"] = df.loc[official, "gs_code"]
+    df.loc[official, "outs_on_pitch"] = df.loc[official, "gs_outs_on_play"]
+    df["outcome_changed"] = official & (df["outcome"] != df["outcome_tm"])
+    _outcome_flags(df)
 
 
 # --- Location (rules 10, 13) --------------------------------------------------------------------
@@ -304,11 +325,131 @@ def add_batted_ball_columns(df: pd.DataFrame) -> None:
     df["is_fb"] = tagged & df["TaggedHitType"].isin(["FlyBall", "Popup"])
 
 
+# --- Game state from the official play-by-play (METRICS.md section 4) ---------------------------
+
+GAME_STATE_DEFAULTS = {
+    "gs_known": False, "gs_on1": False, "gs_on2": False, "gs_on3": False, "gs_runners": np.nan, "gs_outs": np.nan,
+    "gs_bat_score": np.nan, "gs_fld_score": np.nan, "gs_bat_after": np.nan, "gs_fld_after": np.nan,
+    "gs_rbi": 0, "gs_dp": False, "gs_advanced": False, "gs_code": None, "gs_outs_on_play": np.nan,
+}
+_PA_END_ONLY = ("gs_rbi", "gs_dp", "gs_advanced", "gs_code", "gs_outs_on_play")
+
+
+def add_game_state(df: pd.DataFrame, boxes: dict | None) -> None:
+    """Runners, outs, score and RBI before each plate appearance, from the game's official play-by-play
+    (`pbp.match`). Every pitch of a matched PA carries its PA's state; `gs_known` is False for PAs in
+    games with no play-by-play loaded, or that didn't match one. `gs_rbi`, `gs_dp` and `gs_advanced`
+    and `gs_code` / `gs_outs_on_play` (the official result and outs on the play) are set on the
+    PA-ending pitch only.
+
+    Also `off_R` / `off_ER` (official runs and earned runs, on each pitcher's first pitch of a game)
+    and `off_line` (True on every pitch of a pitcher whose official line was found for that game).
+    """
+    from pbp.match import match_game  # local: metrics stays importable without the pbp package loaded
+
+    for col, default in GAME_STATE_DEFAULTS.items():
+        df[col] = default
+    df["off_R"] = 0
+    df["off_ER"] = 0
+    df["off_line"] = False
+    for gid, box in (boxes or {}).items():
+        in_game = df["GameID"] == gid
+        if not in_game.any():
+            continue
+        m = match_game(df[in_game], box)
+        if not m.pa_state.empty:
+            st = m.pa_state.set_index("pa_id")
+            rows = in_game & df["pa_id"].isin(st.index)
+            df.loc[rows, "gs_known"] = True
+            for col in GAME_STATE_DEFAULTS:
+                if col in st and col not in _PA_END_ONLY:
+                    df.loc[rows, col] = df.loc[rows, "pa_id"].map(st[col]).to_numpy()
+            ends = rows & df["pa_end"]
+            for col in _PA_END_ONLY:
+                df.loc[ends, col] = df.loc[ends, "pa_id"].map(st[col]).to_numpy()
+        for pid, line in m.pitcher_lines.items():
+            mine = in_game & (df["PitcherId"].astype(str) == pid)
+            df.loc[mine, "off_line"] = True
+            first = mine.idxmax()
+            df.loc[first, "off_R"] = line.r
+            df.loc[first, "off_ER"] = line.er
+    for col in ("gs_known", "gs_on1", "gs_on2", "gs_on3", "gs_dp", "gs_advanced", "off_line"):
+        df[col] = df[col].astype(bool)
+    df["gs_rbi"] = df["gs_rbi"].fillna(0).astype(int)
+    df["gs_code"] = df["gs_code"].astype(object).where(df["gs_code"].notna(), None)
+
+
+def add_situations(df: pd.DataFrame) -> None:
+    """Situation flags for each PA (on every pitch of it), False when the game state is unknown.
+
+    **RISP**: a runner on second or third.
+    **High leverage (HL)**, any of: RISP; two outs with a runner on; a runner on third with fewer than
+    two outs; inning LATE_INNING or later with the score within LATE_MARGIN runs; inning LATE_INNING or
+    later with the tying or go-ahead run at the plate; a walk-off opportunity (home team batting in the
+    last scheduled inning or later, with the winning run on base or at the plate).
+    """
+    known = df["gs_known"]
+    runners = df["gs_runners"].fillna(0)
+    outs = df["gs_outs"].fillna(0)
+    deficit = df["gs_fld_score"] - df["gs_bat_score"]          # runs the batting team trails by
+    late = df["Inning"] >= config.LATE_INNING
+    sched = pd.to_numeric(df.get("game_innings", pd.Series(index=df.index, dtype=float)),
+                          errors="coerce").fillna(config.SCHEDULED_INNINGS)
+    df["risp"] = known & (df["gs_on2"] | df["gs_on3"])
+    df["walkoff_opp"] = (known & (df["Top/Bottom"] == "Bottom") & (df["Inning"] >= sched)
+                         & (deficit >= 0) & (deficit <= runners))
+    df["high_leverage"] = known & (
+        df["risp"]
+        | ((outs == 2) & (runners > 0))
+        | (df["gs_on3"] & (outs < 2))
+        | (late & (deficit.abs() <= config.LATE_MARGIN))
+        | (late & ((deficit == runners) | (deficit == runners + 1)))
+        | df["walkoff_opp"])
+
+
+def add_qab(df: pd.DataFrame) -> None:
+    """**Quality at-bat (QAB)**, on the PA-ending pitch: a hard-hit ball, BB, HBP, hit, RBI, 4+ pitches
+    seen with two strikes, 8+ pitches, or a runner advanced with nobody out. The last three don't
+    count on a strikeout. RBI and runner advancement come from the play-by-play, so in a game without
+    it they can't count (`qab_full` is False there)."""
+    grp = df.groupby("pa_id", sort=False)
+    pitches = grp["PitchUID"].transform("size")
+    two_strike = grp["Strikes"].transform(lambda s: int((s == 2).sum()))
+    not_k = df["outcome"] != "K"
+    df["pa_pitches"] = pitches
+    df["pa_was_0_2"] = ((df["Balls"] == 0) & (df["Strikes"] == 2)).groupby(df["pa_id"]).transform("any")
+    df["is_qab"] = df["pa_end"] & (
+        df["is_hard_hit"] | df["is_bb"] | df["is_ibb"] | df["is_hbp"] | df["is_hit"] | (df["gs_rbi"] > 0)
+        | (not_k & (two_strike >= 4)) | (not_k & (pitches >= 8))
+        | (not_k & df["gs_known"] & (df["gs_outs"] == 0) & df["gs_advanced"]))
+    df["qab_full"] = df["gs_known"]
+
+
+def add_velo_tiers(df: pd.DataFrame) -> None:
+    """**Pitcher velo tier**: each pitcher's average fastball velo (RelSpeed of FASTBALL_TYPES, after
+    corrections) over every pitch in the frame, then VELO_TIERS. Every pitch carries its pitcher's
+    velo (`opp_fb_velo`) and tier (`opp_tier`, 0 when he threw no fastball)."""
+    fb = df[df["pitch_type"].isin(config.FASTBALL_TYPES)]
+    velo = fb.groupby("PitcherId")["RelSpeed"].mean()
+    df["opp_fb_velo"] = df["PitcherId"].map(velo)
+    df["opp_tier"] = df["opp_fb_velo"].map(velo_tier).fillna(0).astype(int)
+
+
+def velo_tier(mph) -> int | None:
+    if mph is None or pd.isna(mph):
+        return None
+    for tier, floor, _ in config.VELO_TIERS:
+        if mph >= floor:
+            return tier
+    return None
+
+
 # --- Preparation --------------------------------------------------------------------------------
 
 def prepare(raw: pd.DataFrame, rules: list[dict] | None = None,
-            overrides: dict[str, str] | None = None) -> pd.DataFrame:
-    """Raw stored rows -> analysis frame. Pure: returns a new frame, never alters `raw`."""
+            overrides: dict[str, str] | None = None, boxes: dict | None = None) -> pd.DataFrame:
+    """Raw stored rows -> analysis frame. Pure: returns a new frame, never alters `raw`.
+    `boxes` maps GameID -> official play-by-play (`pbp.boxscore.BoxScore`), when loaded."""
     if raw.empty:
         return raw.copy()
     df = raw.copy()
@@ -330,6 +471,11 @@ def prepare(raw: pd.DataFrame, rules: list[dict] | None = None,
     add_pitch_outcomes(df)
     add_batted_ball_columns(df)
     add_pa_outcomes(df)
+    add_game_state(df, boxes)
+    apply_official_results(df)
+    add_situations(df)
+    add_qab(df)
+    add_velo_tiers(df)
     return df.copy()
 
 

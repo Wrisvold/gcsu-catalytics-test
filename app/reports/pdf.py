@@ -67,7 +67,8 @@ HEAD = ParagraphStyle("head", parent=CELL, fontName=BOLD, textColor=white, fontS
 
 # --- Drawing primitives -------------------------------------------------------------------------
 
-def _header(c: Canvas, top: float, kind: str, name: str, season: str, dates: str, extra: str) -> float:
+def _header(c: Canvas, top: float, kind: str, name: str, season: str, dates: str, extra: str,
+            grades: list | None = None) -> float:
     h = 70
     x, y = MARGIN, top - h
     c.setFillColor(NAVY)
@@ -108,13 +109,28 @@ def _header(c: Canvas, top: float, kind: str, name: str, season: str, dates: str
     c.setFont(FONT, 6.8)
     c.drawRightString(rx, y + h - 40, dates)
     c.drawRightString(rx, y + h - 49, extra)
-    c.setStrokeColor(PALE_GREEN)
-    c.setLineWidth(0.8)
-    c.setDash(2, 1.5)
-    c.rect(rx - 146, y + 6, 146, 12, stroke=1, fill=0)
-    c.setDash()
-    c.setFont(FONT, 6)
-    c.drawCentredString(rx - 73, y + 9.8, "Player Grade — pending coach definition")
+    # Score boxes, right to left: "PITCHER SCORE 84 1 game"
+    bx = rx
+    for s in reversed(grades or []):
+        label, value, detail = s.name.upper(), s.text, s.detail
+        w = (pdfmetrics.stringWidth(label, BOLD, 5.6) + pdfmetrics.stringWidth(value, BOLD, 11)
+             + pdfmetrics.stringWidth(detail, FONT, 5.2) + 16)
+        c.setStrokeColor(PALE_GREEN)
+        c.setLineWidth(0.8)
+        c.roundRect(bx - w, y + 4, w, 15, 2, stroke=1, fill=0)
+        tx = bx - w + 4
+        c.setFillColor(PALE_TEXT)
+        c.setFont(BOLD, 5.6)
+        c.drawString(tx, y + 9, label)
+        tx += pdfmetrics.stringWidth(label, BOLD, 5.6) + 4
+        c.setFillColor(white)
+        c.setFont(BOLD, 11)
+        c.drawString(tx, y + 7.5, value)
+        tx += pdfmetrics.stringWidth(value, BOLD, 11) + 4
+        c.setFillColor(PALE_TEXT)
+        c.setFont(FONT, 5.2)
+        c.drawString(tx, y + 9, detail)
+        bx -= w + 4
     return y
 
 
@@ -191,7 +207,7 @@ def _pitch_label(code: str) -> str:
 def _table(df: pd.DataFrame, cols: list[Col], count_key: str | None = None, label_header: str = "Pitch Type",
            row_label=_pitch_label, label_w: float = 82) -> Table:
     spec = build_table(df, cols, count_key)
-    pad = 1.6 if len(spec.rows) <= 7 else 0.6  # tall tables (many pitch types) pack tighter
+    pad = 1.6 if len(spec.rows) <= 5 else 0.6  # tall tables (many pitch types or splits) pack tighter
     head = [Paragraph(label_header, HEAD)] + [
         Paragraph(h + (f'<br/><font size="5" color="{config.LIGHT_GREY}">n={n}</font>' if n is not None else ""), HEAD)
         for h, n in spec.headers]
@@ -274,15 +290,16 @@ def footer_note(scope: Scope, filters_note: str = "") -> str:
 def _draw_pitcher(c: Canvas, r: pitcher_report.PitcherReport, filters_note: str) -> float:
     bottom = _footer(c, footer_note(r.scope, filters_note))
     y = _header(c, PAGE_H - MARGIN, "Individual Pitcher Report", r.name, r.scope.season_text, r.scope.date_text,
-                f"{r.throws_short} · {r.scope.games} game(s) · {r.scope.game_types_text}") - GAP
+                f"{r.throws_short} · {r.scope.games} game(s) · {r.scope.game_types_text}", r.grades) - GAP
     L = r.line
     y = _section(c, y, 1, "Game Summary", f"{L['pitches']} pitches") - 2
-    y = _tiles(c, y, [("IP", L["IP"]), ("PA", L["PA"]), ("H", L["H"]), ("R", L["R"]), ("ER", "—*"),
+    y = _tiles(c, y, [("IP", L["IP"]), ("PA", L["PA"]), ("H", L["H"]), ("R", L["R"]),
+                      ("ER", pitcher_report.er_text(L)),
                       ("BB", L["BB"]), ("K", L["K"]), ("HR", L["HR"]), ("Strike %", L["Strike %"]),
                       ("1st-Pitch Strike %", L["First-Pitch Strike %"])]) - 1.5
     corrected = (f" {r.n_corrected} pitch(es) re-typed by coach pitch-type corrections." if r.n_corrected else "")
-    y = _paragraph(c, y, "* TrackMan does not record earned runs. R = runs scored while this pitcher was on the "
-                         "mound. IP = strikeouts + outs on the play, including outs on the bases." + corrected) - GAP
+    y = _paragraph(c, y, pitcher_report.runs_footnote(L) + " IP = strikeouts + outs on the play, including outs "
+                         "on the bases. Pitcher Score: see the app for the game-by-game breakdown." + corrected) - GAP
 
     y = _section(c, y, 2, "Pitch Type Metrics", "averages by pitch type") - 2
     y = _draw(c, y, _table(r.table, PITCH_TYPE_COLS, count_key="Count")) - 1.5
@@ -321,28 +338,25 @@ def _draw_pitcher(c: Canvas, r: pitcher_report.PitcherReport, filters_note: str)
 def _draw_hitter(c: Canvas, r: hitter_report.HitterReport, filters_note: str) -> float:
     bottom = _footer(c, footer_note(r.scope, filters_note))
     y = _header(c, PAGE_H - MARGIN, "Individual Hitter Report", r.name, r.scope.season_text, r.scope.date_text,
-                f"Bats {r.bats_short} · {r.scope.games} game(s) · {r.scope.game_types_text}") - GAP
+                f"Bats {r.bats_short} · {r.scope.games} game(s) · {r.scope.game_types_text}", r.grades) - GAP
     k = r.key
-    y = _section(c, y, 1, "Key Performance Metrics",
-                 f"{k['PA']} PA · {k['AB']} AB · {k['H']} H · {k['BB']} BB · {k['K']} K") - 2
-    y = _tiles(c, y, [("PA", k["PA"]), ("AVG", k["AVG"]), ("OBP", k["OBP"]), ("SLG", k["SLG"]),
-                      ("wOBA (MLB wts)", k["wOBA"]), ("Hard Hit %", k["Hard Hit %"]),
+    y = _section(c, y, 1, "Key Performance Metrics", hitter_report.key_note(k)) - 2
+    y = _tiles(c, y, [("PA", k["PA"]), ("AVG", k["AVG"]), ("OBP", k["OBP"]), ("SLG", k["SLG"]), ("OPS", k["OPS"]),
+                      ("wOBA (MLB wts)", k["wOBA"]), ("QAB %", k["QAB %"]), ("Hard Hit %", k["Hard Hit %"]),
                       ("Avg Exit Velo", k["Avg Exit Velo"]), ("Max Exit Velo", k["Max Exit Velo"]),
                       ("Avg Launch Angle", k["Avg Launch Angle"])]) - 1.5
-    y = _paragraph(c, y, "wOBA uses 2025 MLB weights (FanGraphs). Exit velo, launch angle and Hard Hit % use balls "
-                         f"in play only; Hard Hit = {config.HARD_HIT_MPH:.0f} mph or harder; n = tracked balls in "
-                         "play.") - GAP
+    y = _paragraph(c, y, hitter_report.key_footnote(k) + " Hitter and Clutch Scores: see the app for the "
+                         "game-by-game breakdown.") - GAP
 
     y = _section(c, y, 2, "Pitch Breakdown", "Seen % = % of pitches seen") - 2
     y = _draw(c, y, _table(r.breakdown, BREAKDOWN_COLS, count_key="Pitches")) - 1.5
     star = f"* fewer than {config.MIN_N['pitches']} pitches. " if any(s.low for s in r.breakdown["Pitches"]) else ""
     y = _paragraph(c, y, f"{star}Avg EV and Avg LA by pitch use balls in play off that pitch type.") - GAP
 
-    splits = _table(r.splits, HITTER_SPLIT_COLS, label_header="Split", row_label=str, label_w=60)
-    splits_note = Paragraph("Max EV, Avg EV and HH % use tracked balls in play. "
-                            "BABIP = (H − HR) ÷ (AB − K − HR + SF).", NOTE)
+    splits = _table(r.splits, HITTER_SPLIT_COLS, label_header="Split", row_label=str, label_w=86)
+    splits_note = Paragraph(hitter_report.SPLITS_NOTE, NOTE)
     splits_h = 14 + 2 + _height(splits) + 1.5 + _height(splits_note)
-    room = max(180.0, y - bottom - splits_h - (14 + 2) - 3 * GAP)
+    room = max(150.0, y - bottom - splits_h - (14 + 2) - 3 * GAP)  # 150: only the busiest case gets this low
     h1 = h2 = room / 2
 
     y = _section(c, y, 3, "Contact & Decisions") - 2
@@ -356,7 +370,7 @@ def _draw_hitter(c: Canvas, r: hitter_report.HitterReport, filters_note: str) ->
         lambda w, h: zone_heatmap(r.zone_avg, "Strike Zone AVG", config.ZONE_AVG_SCALE, "at-bats", w, h),
         lambda w, h: ch.chase_map_chart(r.chase, r.sides, w, h),
     ]) - GAP
-    y = _section(c, y, 4, "RHP vs LHP Splits") - 2
+    y = _section(c, y, 4, "Splits: Pitcher Hand & Velo Tier") - 2
     y = _draw(c, y, splits) - 1.5
     return _draw(c, y, splits_note) - bottom
 

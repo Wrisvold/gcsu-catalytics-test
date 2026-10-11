@@ -35,8 +35,9 @@ CSS = f"""
 .gc-player .name {{ font-size: 22px; font-weight: 800; text-transform: uppercase; }}
 .gc-player .season {{ color: #7FD39A; font-weight: 700; }}
 .gc-player .dates {{ font-size: 12px; color: #C9D3DF; }}
-.gc-grade {{ margin-top: 6px; border: 2px dashed #7FD39A; border-radius: 4px; padding: 4px 8px;
-             font-size: 11px; color: #C9D3DF; display: inline-block; }}
+.gc-grade {{ margin-top: 6px; border: 2px solid #7FD39A; border-radius: 4px; padding: 3px 8px;
+             font-size: 11px; color: #C9D3DF; display: inline-block; margin-left: 6px; }}
+.gc-grade b {{ color: white; font-size: 18px; margin: 0 4px; }}
 .gc-section {{ background: var(--navy); color: white; border-radius: 4px; padding: 6px 12px; margin: 18px 0 8px;
                font-weight: 800; letter-spacing: .5px; display: flex; align-items: center; gap: 12px; }}
 .gc-section .num {{ background: var(--green); padding: 1px 10px; border-radius: 3px; }}
@@ -105,14 +106,16 @@ def _wordmark() -> str:
 
 
 def header(report_kind: str, player: str | None = None, season: str = "", dates: str = "",
-           extra: str = "") -> None:
-    """Navy header band from the GCSU mockup. `report_kind` e.g. "Individual Pitcher Report"."""
+           extra: str = "", grades: list | None = None) -> None:
+    """Navy header band from the GCSU mockup. `report_kind` e.g. "Individual Pitcher Report".
+    `grades` are the report's ScoreSummary objects (Pitcher Score; Hitter and Clutch Score)."""
     right = ""
     if player:
+        boxes = "".join(f'<span class="gc-grade">{escape(s.name)}<b>{escape(s.text)}</b>{escape(s.detail)}</span>'
+                        for s in grades or [])
         right = (f'<div class="gc-player"><div class="name">{escape(player)}</div>'
                  f'<div class="season">{escape(season)}</div><div class="dates">{escape(dates)}</div>'
-                 f'<div class="dates">{escape(extra)}</div>'
-                 '<div class="gc-grade">Player Grade — pending coach definition</div></div>')
+                 f'<div class="dates">{escape(extra)}</div><div>{boxes}</div></div>')
     st.markdown(
         f'<div class="gc-header">{_wordmark()}<div class="gc-titles">'
         f'<div class="gc-title">{config.APP_TITLE_CAPS}</div><div class="gc-sub">{escape(report_kind.upper())}</div>'
@@ -176,6 +179,33 @@ def show_table(html: str, foot: str = "") -> None:
     st.markdown(html, unsafe_allow_html=True)
     if foot:
         st.markdown(f'<div class="gc-foot">{escape(foot)}</div>', unsafe_allow_html=True)
+
+
+SCORES_NOTE = ("Each game is scored 1–100 on its own, and the header shows the average over the games in "
+               "this report. Each part earns points in a straight line from its floor (0) to the coaches' goal "
+               "(all its points); parts with no data in a game are left out and the rest scaled to 100. Bonuses "
+               "and penalties are then added (pitcher bonuses at most +15 a game). Definitions: "
+               "METRICS.md section 5.")
+
+
+def score_breakdown(summaries: list) -> None:
+    """How each score was reached, game by game: what each part earned, then bonuses and penalties."""
+    for s in summaries:
+        st.markdown(f"**{s.name}: {s.text}** ({s.detail})")
+        if not s.games:
+            continue
+        rows = []
+        for g in s.games:
+            row = {"Date": fmt_date(g.game_date), "Opponent": g.opponent, "Score": g.total,
+                   "Parts (of 100)": round(g.base, 1)}
+            for part in g.parts:
+                row[f"{part.label} ({part.points:g})"] = ("left out" if part.earned is None
+                                                          else f"{part.value_text} → {part.earned:.1f}")
+            adj = [f"{a.label} ×{a.count} ({a.total:+d})" for a in g.adjustments if a.count]
+            row["Bonuses / penalties"] = "; ".join(adj) or "none"
+            row["Notes"] = "; ".join(g.notes)
+            rows.append(row)
+        st.dataframe(pd.DataFrame(rows), hide_index=True)
 
 
 # --- Filters ------------------------------------------------------------------------------------

@@ -12,7 +12,7 @@ import pandas as pd
 
 import config
 from metrics.common import (
-    CHASE_REGIONS, Stat, ZoneGrid, avg_stat, babip_stat, batting_counts, chase_pct, hard_hit_pct,
+    CHASE_REGIONS, Stat, ZoneGrid, avg_stat, babip_stat, batting_counts, bb_pct, chase_pct, hard_hit_pct, k_pct,
     max_stat, mean_stat, obp_stat, pitch_type_order, rate, ratio, slg_stat, whiff_pct, woba_stat,
     zone_grid,
 )
@@ -33,18 +33,36 @@ def for_hitter(df: pd.DataFrame, hitter_id: str) -> pd.DataFrame:
     return df[df["hitter_id"] == str(hitter_id)]
 
 
+def ops_stat(c: dict) -> Stat:
+    """**OPS**: OBP + SLG. n = PA; greyed when either part is (fewer than MIN_N['pa'] PA or
+    MIN_N['ab'] AB)."""
+    obp, slg = obp_stat(c), slg_stat(c)
+    value = obp.value + slg.value if obp.value is not None and slg.value is not None else None
+    return Stat(value, c["PA"], c["PA"] + 1 if (obp.low or slg.low) else 0, "avg")
+
+
+def qab_pct(df: pd.DataFrame) -> Stat:
+    """**QAB %**: quality at-bats (common.add_qab) ÷ PA. Min n: MIN_N['pa']."""
+    return rate(df["is_qab"], df["pa_end"], "pa")
+
+
 def key_metrics(df: pd.DataFrame) -> dict:
-    """PA, AVG, OBP, SLG, wOBA (MLB weights), Hard Hit %, Avg / Max Exit Velo, Avg Launch Angle.
+    """PA, AVG, OBP, SLG, OPS, wOBA (MLB weights), QAB %, Hard Hit %, Avg / Max Exit Velo, Avg Launch Angle.
 
     **Avg Exit Velo / Max Exit Velo**: mean / max ExitSpeed over balls in play with a trusted exit
     velo (ev_ok). Min n: MIN_N['bip'].
     **Avg Launch Angle**: mean Angle over balls in play with a trusted angle (la_ok). Min n: MIN_N['bip'].
+    **RBI**: from the official play-by-play; None unless every PA has it.
     """
     c = batting_counts(df)
+    ends = df[df["pa_end"]]
     return {
         "PA": c["PA"], "AB": c["AB"], "H": c["H"], "2B": c["2B"], "3B": c["3B"], "HR": c["HR"],
         "BB": c["BB"] + c["IBB"], "HBP": c["HBP"], "K": c["K"],
-        "AVG": avg_stat(c), "OBP": obp_stat(c), "SLG": slg_stat(c), "wOBA": woba_stat(c),
+        "RBI": int(ends["gs_rbi"].sum()) if len(ends) and ends["gs_known"].all() else None,
+        "qab_full": bool(len(ends)) and bool(ends["qab_full"].all()),
+        "AVG": avg_stat(c), "OBP": obp_stat(c), "SLG": slg_stat(c), "OPS": ops_stat(c), "wOBA": woba_stat(c),
+        "QAB %": qab_pct(df),
         "Hard Hit %": hard_hit_pct(df),
         "Avg Exit Velo": mean_stat(df["ev"], "bip", "mph"),
         "Max Exit Velo": max_stat(df["ev"], "bip", "mph"),
@@ -179,14 +197,30 @@ def swing_decisions(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
     return pts, {d: int((pts["decision"] == d).sum()) for d in SWING_DECISIONS}
 
 
+def _split_row(sub: pd.DataFrame) -> dict:
+    c = batting_counts(sub)
+    return {"PA": c["PA"], "AVG": avg_stat(c), "HH %": hard_hit_pct(sub), "K %": k_pct(c), "BB %": bb_pct(c),
+            "Whiff %": whiff_pct(sub), "Chase %": chase_pct(sub),
+            "Avg EV": mean_stat(sub["ev"], "bip", "mph"), "Max EV": max_stat(sub["ev"], "bip", "mph"),
+            "BABIP": babip_stat(c)}
+
+
+def tier_label(tier: int) -> str:
+    for t, _, label in config.VELO_TIERS:
+        if t == tier:
+            return f"Tier {t} ({label})"
+    return "No fastball seen"
+
+
 def pitcher_splits(df: pd.DataFrame) -> pd.DataFrame:
-    """vs RHP and vs LHP (PitcherThrows): AVG, Max EV, Avg EV, HH %, Whiff %, Chase %, BABIP."""
+    """vs RHP and vs LHP (PitcherThrows), then by the pitcher's velo tier (common.add_velo_tiers):
+    PA, AVG, HH %, K %, BB %, Whiff %, Chase %, Avg / Max EV, BABIP. Only tiers the hitter saw pitches
+    from are listed (to fit the one-page PDF); pitchers with no fastball in the frame get a "No fastball
+    seen" row."""
     out = {}
     for name, hand in [("vs RHP", "Right"), ("vs LHP", "Left")]:
-        sub = df[df["PitcherThrows"] == hand]
-        c = batting_counts(sub)
-        out[name] = {"PA": c["PA"], "AVG": avg_stat(c),
-                     "Max EV": max_stat(sub["ev"], "bip", "mph"), "Avg EV": mean_stat(sub["ev"], "bip", "mph"),
-                     "HH %": hard_hit_pct(sub), "Whiff %": whiff_pct(sub), "Chase %": chase_pct(sub),
-                     "BABIP": babip_stat(c)}
+        out[name] = _split_row(df[df["PitcherThrows"] == hand])
+    for tier in [t for t, _, _ in config.VELO_TIERS] + [0]:
+        if (df["opp_tier"] == tier).any():
+            out[tier_label(tier)] = _split_row(df[df["opp_tier"] == tier])
     return pd.DataFrame(out).T

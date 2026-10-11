@@ -14,6 +14,7 @@ import pandas as pd
 import config
 import db
 from metrics.common import prepare
+from pbp.boxscore import BoxScore
 
 
 @dataclass(frozen=True)
@@ -28,11 +29,18 @@ class ReportFilters:
     temp_max: float | None = None
 
 
+def load_boxes(conn: sqlite3.Connection, game_ids: list[str]) -> dict[str, BoxScore]:
+    """Official play-by-play for these games, where loaded."""
+    return {gid: BoxScore.from_json(r["box_json"]) for gid, r in db.get_play_by_play(conn, game_ids).items()}
+
+
 def load_frame(conn: sqlite3.Connection, f: ReportFilters) -> pd.DataFrame:
-    """Analysis frame for every pitch in the games that pass the filters, corrections applied."""
+    """Analysis frame for every pitch in the games that pass the filters, corrections and official
+    play-by-play applied."""
     raw = db.query_pitches(conn, f.date_from, f.date_to, list(f.game_ids) or None,
                            list(f.game_types) or None, list(f.home_away) or None, f.temp_min, f.temp_max)
-    return prepare(raw, db.get_rules(conn), db.get_overrides(conn))
+    boxes = load_boxes(conn, sorted(set(raw["GameID"]))) if not raw.empty else {}
+    return prepare(raw, db.get_rules(conn), db.get_overrides(conn), boxes)
 
 
 def display_name(trackman_name: str) -> str:

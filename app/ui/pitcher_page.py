@@ -10,8 +10,8 @@ from metrics import pitching
 from reports import pitcher as report
 from reports.tables import PITCH_TYPE_COLS, PITCHER_SPLIT_COLS
 from ui.common import (
-    footer, frame, get_conn, header, pdf_controls, report_filters, section, show_table, stat_table, thresholds_note,
-    tiles,
+    SCORES_NOTE, footer, frame, get_conn, header, pdf_controls, report_filters, score_breakdown, section, show_table,
+    stat_table, thresholds_note, tiles,
 )
 
 
@@ -35,18 +35,18 @@ def render() -> None:
     pdf_controls("pitcher", r, df, f, len(roster))
 
     header("Individual Pitcher Report", r.name, r.scope.season_text, r.scope.date_text,
-           f"{r.throws_short} · {r.scope.games} game(s) · {r.scope.game_types_text}")
+           f"{r.throws_short} · {r.scope.games} game(s) · {r.scope.game_types_text}", r.grades)
     if r.n_corrected:
         st.caption(f"{r.n_corrected} of this pitcher's pitches are re-typed by coach corrections "
                    "(Pitch Type Corrections page).")
 
     section(1, "Game Summary", f"{r.line['pitches']} pitches")
     L = r.line
-    tiles([("IP", L["IP"]), ("PA", L["PA"]), ("H", L["H"]), ("R", L["R"]), ("ER", "—*"), ("BB", L["BB"]),
-           ("K", L["K"]), ("HR", L["HR"]), ("Strike %", L["Strike %"]), ("1st-Pitch Strike %", L["First-Pitch Strike %"])])
-    st.markdown('<div class="gc-foot">* TrackMan does not record earned runs. R = runs scored while this '
-                "pitcher was on the mound. IP counts strikeouts plus outs on the play, including outs on the "
-                "bases.</div>", unsafe_allow_html=True)
+    tiles([("IP", L["IP"]), ("PA", L["PA"]), ("H", L["H"]), ("R", L["R"]), ("ER", report.er_text(L)),
+           ("BB", L["BB"]), ("K", L["K"]), ("HR", L["HR"]), ("Strike %", L["Strike %"]),
+           ("1st-Pitch Strike %", L["First-Pitch Strike %"])])
+    st.markdown(f'<div class="gc-foot">{report.runs_footnote(L)} IP counts strikeouts plus outs on the play, '
+                "including outs on the bases.</div>", unsafe_allow_html=True)
 
     section(2, "Pitch Type Metrics", "averages by pitch type")
     star = "* fewer than 10 pitches. " if any(s.low for s in r.table["Count"]) else ""
@@ -74,5 +74,9 @@ def render() -> None:
     show_table(stat_table(r.splits, PITCHER_SPLIT_COLS, row_label=str, label_header="Split"),
                "Hitter side is the batter who finished each plate appearance. GB % and FB % use TaggedHitType; "
                "FB % includes popups.")
+
+    section(6, "Pitcher Score", "1–100, from the coaches' scoring sheet")
+    score_breakdown(r.grades)
+    st.caption(SCORES_NOTE)
 
     footer(thresholds_note())

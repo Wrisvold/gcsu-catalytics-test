@@ -7,6 +7,9 @@ import streamlit as st
 import config
 import db
 import ingest
+from metrics.common import prepare
+from pbp.boxscore import BoxScore, BoxScoreError, parse_html
+from pbp.match import GameMatch, match_game
 from reports.context import fmt_date
 from ui.common import game_label, get_conn, header
 
@@ -77,13 +80,18 @@ def game_form(conn, g: pd.Series, key: str) -> None:
         wind_dir = c1.text_input("Wind direction", key=f"{key}-wind_dir", value=g["wind_dir"] or "",
                                  placeholder="e.g. out to LF, or from 225°", help=nws_help)
         weather["wind_dir"] = wind_dir.strip() or None
+        innings_opts = [9, 7]
+        current = int(_num(g.get("innings")) or config.SCHEDULED_INNINGS)
+        innings = c2.selectbox("Scheduled innings", innings_opts, key=f"{key}-innings",
+                               index=innings_opts.index(current) if current in innings_opts else 0,
+                               help="7 for a 7-inning game. Sets when a walk-off chance can start (Clutch Score).")
         notes = st.text_area("Notes", key=f"{key}-notes", value=g["notes"] or "", height=68)
         if st.form_submit_button("Save game details", type="primary"):
             fields = {
                 "game_type": None if game_type == NOT_SET else game_type,
                 "opponent": opponent.strip() or None,
                 "home_away": None if home_away == NOT_SET else home_away,
-                "notes": notes.strip() or None, **weather,
+                "notes": notes.strip() or None, "innings": innings, **weather,
             }
             source = g.get("weather_source")
             if source and not source.endswith(", edited") and any(
@@ -94,14 +102,95 @@ def game_form(conn, g: pd.Series, key: str) -> None:
             st.rerun()
 
 
+def _pbp_summary(conn, gid: str) -> tuple[GameMatch, BoxScore] | None:
+    stored = db.get_play_by_play(conn, [gid]).get(gid)
+    if not stored:
+        return None
+    box = BoxScore.from_json(stored["box_json"])
+    df = prepare(db.query_pitches(conn, game_ids=[gid]), db.get_rules(conn), db.get_overrides(conn))
+    return match_game(df, box), box
+
+
+def _save_pbp(conn, gid: str, page: str, source: str) -> None:
+    """Parse a box-score page, check it is this game, and store it. Errors go to the page as messages."""
+    try:
+        box = parse_html(page, source)
+    except BoxScoreError as e:
+        st.session_state[f"pbp-msg-{gid}"] = ("error", str(e))
+        return
+    df = prepare(db.query_pitches(conn, game_ids=[gid]), db.get_rules(conn), db.get_overrides(conn))
+    m = match_game(df, box)
+    if m.tm_pas and m.matched < 0.5 * m.tm_pas:
+        st.session_state[f"pbp-msg-{gid}"] = (
+            "error", f"This box score ({box.away} at {box.home}) matched only {m.matched} of TrackMan's {m.tm_pas} "
+                     "plate appearances, so it looks like a different game. Not saved.")
+        return
+    db.set_play_by_play(conn, gid, box.to_json(), source)
+    st.session_state[f"pbp-msg-{gid}"] = ("success", f"Play-by-play saved: {box.away} {box.away_runs} at "
+                                                     f"{box.home} {box.home_runs}.")
+
+
+def pbp_panel(conn, g: pd.Series, key: str) -> None:
+    """Load, check and remove the game's official play-by-play."""
+    gid = g["game_id"]
+    st.markdown("**Official play-by-play** — runners on base, score, RBI and earned runs, which TrackMan "
+                "doesn't record. Needed for the Clutch Score, RBIs and RISP in the Hitter Score, and official "
+                "R / ER.")
+    if msg := st.session_state.pop(f"pbp-msg-{gid}", None):
+        getattr(st, msg[0])(msg[1])
+    found = _pbp_summary(conn, gid)
+    if found:
+        m, box = found
+        stored = db.get_play_by_play(conn, [gid])[gid]
+        icon = ":material/check_circle:" if m.ok else ":material/warning:"
+        st.markdown(f"{icon} {box.away} {box.away_runs} at {box.home} {box.home_runs} · matched **{m.matched} of "
+                    f"{m.tm_pas}** TrackMan plate appearances ({m.official_pas} official) · from "
+                    f"{stored['source']}")
+        problems = [("Play-by-play checks", m.replay_warnings),
+                    ("TrackMan and the official scoring disagree", m.disagreements),
+                    ("TrackMan plate appearances with no official match", m.unmatched_tm),
+                    ("Official plate appearances not in TrackMan", m.unmatched_official),
+                    ("Official pitchers not found in TrackMan (their R / ER isn't used)", m.unmatched_pitchers)]
+        for title, items in problems:
+            if items:
+                with st.expander(f"{title} ({len(items)})"):
+                    st.markdown("\n".join(f"- {i}" for i in items))
+        if st.button("Remove play-by-play", key=f"{key}-pbp-del"):
+            db.delete_play_by_play(conn, gid)
+            st.rerun()
+    c1, c2 = st.columns(2)
+    if not config.DEMO_MODE:
+        url = c1.text_input("Box-score link", key=f"{key}-pbp-url",
+                            placeholder="https://gcsubobcats.com/sports/baseball/stats/2026/…/boxscore/…",
+                            help="The game's box score page on the home team's athletics site.")
+        if c1.button("Fetch play-by-play", key=f"{key}-pbp-fetch", disabled=not url):
+            from pbp.fetch import FetchError, fetch_page  # network only on this click
+
+            try:
+                with st.spinner("Downloading the box score…"):
+                    page = fetch_page(url)
+            except FetchError as e:
+                st.session_state[f"pbp-msg-{gid}"] = ("error", str(e))
+            else:
+                _save_pbp(conn, gid, page, url.strip())
+            st.rerun()
+    up = c2.file_uploader("…or upload the saved box-score page", type=["html", "htm"], key=f"{key}-pbp-file",
+                          help="In your browser, open the box score and save it (Ctrl+S, \"Webpage, HTML only\").")
+    if up is not None and c2.button("Load uploaded page", key=f"{key}-pbp-load"):
+        _save_pbp(conn, gid, up.getvalue().decode("utf-8", errors="replace"), up.name)
+        st.rerun()
+
+
 def _games_table(conn) -> pd.DataFrame:
     games = db.get_games(conn)
     counts = db.game_pitch_counts(conn)
+    pbp = db.get_play_by_play(conn)
     return pd.DataFrame({
         "Date": games["game_date"].map(fmt_date), "Type": games["game_type"], "Opponent": games["opponent"],
         "H/A": games["home_away"], "Temp °F": games["temp_f"], "Humidity %": games["humidity_pct"],
         "Wind mph": games["wind_mph"], "Wind dir": games["wind_dir"], "Stadium": games["stadium"],
         "Weather from": games["weather_source"], "Pitches": games["game_id"].map(counts),
+        "Play-by-play": games["game_id"].map(lambda gid: "yes" if gid in pbp else ""),
         "GameID": games["game_id"],
     })
 
@@ -150,6 +239,7 @@ def load_page() -> None:
             for gid in game_ids:
                 with st.expander(game_label(all_games.loc[gid]), expanded=gid in new_ids):
                     game_form(conn, all_games.loc[gid], f"load-{gid}")
+                    pbp_panel(conn, all_games.loc[gid], f"load-{gid}")
 
     with st.expander("Load history"):
         st.dataframe(db.get_loads(conn).rename(columns={
@@ -165,9 +255,12 @@ def context_page() -> None:
     if games.empty:
         st.info("No games yet. Load a TrackMan CSV on the **Load Data** page.")
         return
-    st.markdown("TrackMan files don't include game type, opponent, home/away or weather. Enter them here; "
-                "reports can then be filtered by game type, home/away and temperature.")
+    st.markdown("TrackMan files don't include game type, opponent, home/away, weather or the game situation "
+                "(runners, score, RBI). Enter the details here and load the official play-by-play below; reports "
+                "can then be filtered by game type, home/away and temperature.")
     st.dataframe(_games_table(conn), hide_index=True)
     g = games.sort_values(["game_date", "game_id"], ascending=False).set_index("game_id", drop=False)
     gid = st.selectbox("Edit game", g.index.tolist(), format_func=lambda x: game_label(g.loc[x]))
     game_form(conn, g.loc[gid], f"ctx-{gid}")
+    st.divider()
+    pbp_panel(conn, g.loc[gid], f"ctx-{gid}")

@@ -27,28 +27,34 @@ def for_pitcher(df: pd.DataFrame, pitcher_id: str) -> pd.DataFrame:
 
 
 def outs_recorded(df: pd.DataFrame) -> int:
-    """**Outs recorded**: strikeouts + the sum of OutsOnPlay over every pitch thrown (including
-    baserunning outs on pitches that did not end a PA). OutsOnPlay does not include strikeouts in
-    TrackMan data (AUDIT.md section 5)."""
-    return int(df.loc[df["pa_end"], "is_k"].sum() + df["OutsOnPlay"].fillna(0).sum())
+    """**Outs recorded**: the sum of `outs_on_pitch` over every pitch thrown: strikeouts plus
+    OutsOnPlay, including baserunning outs on pitches that did not end a PA (OutsOnPlay leaves
+    strikeouts out; AUDIT.md section 5). On a PA the official play-by-play matched, its outs replace
+    TrackMan's (common.apply_official_results)."""
+    return int(df["outs_on_pitch"].sum())
 
 
 def performance_line(df: pd.DataFrame) -> dict:
     """IP, PA, H, R, ER, BB, K, HR, HBP, Strike %, First-Pitch Strike %.
 
     **IP**: outs recorded ÷ 3, shown in baseball notation (3.1 = 3⅓).
-    **R**: sum of RunsScored on this pitcher's pitches (runs scored while he was pitching; TrackMan
-    does not track inherited runners).
-    **ER**: not available in TrackMan; shown as "—".
+    **R** and **ER**: from the official box score for each game with play-by-play loaded and this
+    pitcher's line found there, so runs are charged to the pitcher who put the runner on (A13). For a
+    game without one, R is the sum of RunsScored on his pitches (runs that scored while he was
+    pitching) and ER is unknown, so ER shows "—" unless every game is official.
     **Strike %**: strikes (rule 12) ÷ pitches. Min n: MIN_N['pitches'].
     **First-Pitch Strike %**: strikes on the first pitch of a PA ÷ PAs this pitcher threw the first
     pitch of. Min n: MIN_N['first_pitches'].
     """
     c = batting_counts(df)
     outs = outs_recorded(df)
+    official = df["off_line"] if "off_line" in df else pd.Series(False, index=df.index)
+    runs = int(df.loc[official, "off_R"].sum() + df.loc[~official, "RunsScored"].fillna(0).sum()) \
+        if official.any() else int(df["RunsScored"].fillna(0).sum())
     return {
         "IP": format_ip(outs), "outs": outs, "PA": c["PA"], "H": c["H"],
-        "R": int(df["RunsScored"].fillna(0).sum()), "ER": "—",
+        "R": runs, "ER": int(df["off_ER"].sum()) if len(df) and official.all() else "—",
+        "runs_official": "all" if len(df) and official.all() else ("some" if official.any() else "none"),
         "BB": c["BB"] + c["IBB"], "K": c["K"], "HR": c["HR"], "HBP": c["HBP"],
         "Strike %": rate(df["is_strike"], pd.Series(True, index=df.index), "pitches"),
         "First-Pitch Strike %": rate(df["is_strike"], df["is_first_pitch"], "first_pitches"),
@@ -84,7 +90,7 @@ def pitch_type_table(df: pd.DataFrame) -> pd.DataFrame:
     **HB** (HorzBreak), **Extension**, **Rel Height** (RelHeight): averages (and maxima) over the
     pitches of that type with a value.
     **Strike %**, **Whiff %**, **Chase %**: see common definitions.
-    **Out %**: PAs that ended on this pitch type with an out (strikeout, or OutsOnPlay > 0) ÷ all PAs
+    **Out %**: PAs that ended on this pitch type with an out (strikeout, or an out on the play) ÷ all PAs
     that ended on this pitch type. Min n: MIN_N['pa_ended']. (ASSUMPTIONS.md A9)
     In the "All" row the movement columns are left blank; averaging them across pitch types means
     nothing.

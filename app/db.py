@@ -1,4 +1,4 @@
-"""SQLite storage: raw pitches, game context, and pitch-type corrections.
+"""SQLite storage: raw pitches, game context, pitch-type corrections and official play-by-play.
 
 Raw rows are stored exactly as read from the CSV (every column, as text) and are never updated.
 Corrections and filters are applied at query time (rule 1). No UI code lives here.
@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS games (
     wind_dir          TEXT,
     notes             TEXT,
     weather_source    TEXT,      -- e.g. "NWS station KMLJ"; NULL when entered by hand
+    innings           INTEGER,   -- scheduled innings (7 or 9); NULL = config.SCHEDULED_INNINGS
     updated_at        TEXT
 );
 
@@ -62,6 +63,13 @@ CREATE TABLE IF NOT EXISTS pitch_overrides (
     created_at     TEXT
 );
 
+CREATE TABLE IF NOT EXISTS play_by_play (
+    game_id    TEXT PRIMARY KEY,  -- TrackMan GameID this official play-by-play belongs to
+    source     TEXT,              -- box-score link, or the name of the uploaded page
+    loaded_at  TEXT,
+    box_json   TEXT NOT NULL      -- the official rows as read from the page (pbp.boxscore.BoxScore)
+);
+
 CREATE TABLE IF NOT EXISTS loads (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     source_file       TEXT,
@@ -74,7 +82,7 @@ CREATE TABLE IF NOT EXISTS loads (
 """
 
 GAME_FIELDS = ["game_date", "stadium", "first_pitch_local", "game_type", "opponent", "home_away",
-               "temp_f", "humidity_pct", "wind_mph", "wind_dir", "notes", "weather_source"]
+               "temp_f", "humidity_pct", "wind_mph", "wind_dir", "notes", "weather_source", "innings"]
 
 
 def _now() -> str:
@@ -89,7 +97,16 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after a database was created. Never drops or rewrites data."""
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(games)")}
+    if "innings" not in have:
+        conn.execute("ALTER TABLE games ADD COLUMN innings INTEGER")
+        conn.commit()
 
 
 # --- Pitches ------------------------------------------------------------------------------------
@@ -137,7 +154,7 @@ def query_pitches(conn: sqlite3.Connection, date_from: str | None = None, date_t
         where.append("g.temp_f >= ?"); params.append(temp_min)
     if temp_max is not None:
         where.append("g.temp_f <= ?"); params.append(temp_max)
-    sql = ("SELECT p.raw_json, g.game_type, g.home_away, g.opponent, g.temp_f "
+    sql = ("SELECT p.raw_json, g.game_type, g.home_away, g.opponent, g.temp_f, g.innings "
            "FROM pitches p LEFT JOIN games g ON g.game_id = p.game_id")
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -149,6 +166,7 @@ def query_pitches(conn: sqlite3.Connection, date_from: str | None = None, date_t
     df["game_home_away"] = [r["home_away"] for r in rows]
     df["game_opponent"] = [r["opponent"] for r in rows]
     df["game_temp_f"] = [r["temp_f"] for r in rows]
+    df["game_innings"] = [r["innings"] for r in rows]
     return df
 
 
@@ -174,7 +192,9 @@ def update_game(conn: sqlite3.Connection, game_id: str, fields: dict) -> None:
 
 def get_games(conn: sqlite3.Connection) -> pd.DataFrame:
     rows = conn.execute("SELECT * FROM games ORDER BY game_date, game_id").fetchall()
-    return pd.DataFrame([dict(r) for r in rows], columns=["game_id", *GAME_FIELDS, "updated_at"])
+    # dtype=object keeps a blank field as None. Without it, newer pandas makes a text column with any
+    # blanks a string column and turns None into NaN, which is truthy and breaks `value or default`.
+    return pd.DataFrame([dict(r) for r in rows], columns=["game_id", *GAME_FIELDS, "updated_at"], dtype=object)
 
 
 # --- Pitch-type corrections ---------------------------------------------------------------------
@@ -215,6 +235,30 @@ def get_overrides(conn: sqlite3.Connection) -> dict[str, str]:
             for r in conn.execute("SELECT pitch_uid, corrected_type FROM pitch_overrides").fetchall()}
 
 
+# --- Official play-by-play ---------------------------------------------------------------------
+
+def set_play_by_play(conn: sqlite3.Connection, game_id: str, box_json: str, source: str) -> None:
+    conn.execute("INSERT OR REPLACE INTO play_by_play (game_id, source, loaded_at, box_json) VALUES (?, ?, ?, ?)",
+                 (game_id, source, _now(), box_json))
+    conn.commit()
+
+
+def delete_play_by_play(conn: sqlite3.Connection, game_id: str) -> None:
+    conn.execute("DELETE FROM play_by_play WHERE game_id = ?", (game_id,))
+    conn.commit()
+
+
+def get_play_by_play(conn: sqlite3.Connection, game_ids: list[str] | None = None) -> dict[str, dict]:
+    """game_id -> {"source", "loaded_at", "box_json"} for the given games (all games if None)."""
+    sql, params = "SELECT * FROM play_by_play", []
+    if game_ids is not None:
+        if not game_ids:
+            return {}
+        sql += f" WHERE game_id IN ({','.join('?' * len(game_ids))})"
+        params = list(game_ids)
+    return {r["game_id"]: dict(r) for r in conn.execute(sql, params).fetchall()}
+
+
 # --- Load log -----------------------------------------------------------------------------------
 
 def log_load(conn: sqlite3.Connection, source_file: str, rows_in_file: int, added: int,
@@ -241,4 +285,5 @@ def data_version(conn: sqlite3.Connection) -> tuple:
     return (q("SELECT COUNT(*), MAX(loaded_at) FROM pitches")[:],
             tuple(tuple(r) for r in conn.execute("SELECT * FROM games ORDER BY game_id")),
             tuple(tuple(r) for r in conn.execute("SELECT * FROM pitch_type_rules ORDER BY id")),
-            tuple(tuple(r) for r in conn.execute("SELECT pitch_uid, corrected_type FROM pitch_overrides ORDER BY 1")))
+            tuple(tuple(r) for r in conn.execute("SELECT pitch_uid, corrected_type FROM pitch_overrides ORDER BY 1")),
+            tuple(tuple(r) for r in conn.execute("SELECT game_id, loaded_at FROM play_by_play ORDER BY 1")))

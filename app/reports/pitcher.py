@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from metrics import pitching
+from metrics import pitching, scores
 from metrics.common import ZoneGrid
 from reports.context import Scope, display_name, scope_of
 
@@ -24,10 +24,31 @@ class PitcherReport:
     whiffs: pd.DataFrame
     splits: pd.DataFrame
     n_corrected: int           # pitches whose type a coach correction changed
+    score: scores.ScoreSummary
 
     @property
     def throws_short(self) -> str:
         return {"Right": "RHP", "Left": "LHP"}.get(self.throws, self.throws or "")
+
+    @property
+    def grades(self) -> list[scores.ScoreSummary]:
+        return [self.score]
+
+
+def er_text(line: dict) -> str:
+    return str(line["ER"]) if line["ER"] != "—" else "—*"
+
+
+def runs_footnote(line: dict) -> str:
+    """Where R and ER came from (shared by the app and the PDF)."""
+    official = line["runs_official"]
+    if official == "all":
+        return "R and ER are official (box score): runs are charged to the pitcher who put the runner on."
+    if official == "some":
+        return ("* R is official (box score) for games with play-by-play loaded and TrackMan's runs scored while "
+                "he pitched for the rest; ER needs the play-by-play for every game.")
+    return ("* ER needs the game's official play-by-play (Game Context page). R = runs scored while this pitcher "
+            "was on the mound (TrackMan).")
 
 
 def build(df: pd.DataFrame, pitcher_id: str) -> PitcherReport | None:
@@ -48,4 +69,5 @@ def build(df: pd.DataFrame, pitcher_id: str) -> PitcherReport | None:
         whiffs=pitching.whiff_locations(p),
         splits=pitching.hitter_splits(p),
         n_corrected=int(p["pitch_type_corrected"].sum()),
+        score=scores.pitcher_scores(df, pitcher_id),
     )

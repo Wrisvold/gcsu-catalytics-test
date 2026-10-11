@@ -47,10 +47,10 @@ PLATE_SIDE_TO_CATCHER_X = -1.0
 CONTACT_Z_TO_CATCHER_X = 1.0
 
 # --- Batted balls (rules 17, 18) ----------------------------------------------------------------
-HARD_HIT_MPH = 95.0  # coaches' definition
-# HitLaunchConfidence values excluded from exit velo, launch angle and Hard Hit %. Add "Estimated"
-# here to drop those too (ASSUMPTIONS.md, A6).
-EXCLUDED_LAUNCH_CONFIDENCE = ["Low"]
+HARD_HIT_MPH = 92.5  # coaches' definition (ASSUMPTIONS.md A8, answered Oct 2026; MLB uses 95)
+# HitLaunchConfidence values excluded from exit velo, launch angle and Hard Hit %. The coaches chose to
+# keep every reading, Low included (A6, answered Oct 2026). Add "Low" or "Estimated" here to drop them.
+EXCLUDED_LAUNCH_CONFIDENCE: list[str] = []
 # Contact point: ContactPositionX is measured toward the pitcher. Assumed origin = back tip of the
 # plate, so the front edge is at 17 in. "Out front" = X greater than this (ASSUMPTIONS.md, A7).
 CONTACT_OUT_FRONT_FT = 17 / 12
@@ -137,7 +137,8 @@ WOBA_SEASON = 2025
 WOBA_WEIGHTS = {"BB": 0.691, "HBP": 0.722, "1B": 0.882, "2B": 1.252, "3B": 1.584, "HR": 2.037}
 
 # --- Weather lookup (P5) ------------------------------------------------------------------------
-# The only network call the app makes, and only when this is True. No API key is needed.
+# One of the app's two network calls (the other: fetching a box-score link), made only when this is True.
+# No API key is needed.
 WEATHER_LOOKUP_ENABLED = False
 # NWS requires a User-Agent naming the app and a contact it can reach if the app misbehaves.
 NWS_USER_AGENT = "(gcsu-catalytics test version)"
@@ -152,3 +153,93 @@ FIELD_TZ = "America/New_York"  # used only when a first-pitch time has no UTC of
 # --- Game context (P3) --------------------------------------------------------------------------
 GAME_TYPES = ["Game", "Scrimmage", "Intrasquad", "Bullpen"]
 HOME_AWAY = ["Home", "Away", "Neutral"]
+SCHEDULED_INNINGS = 9        # default for a game; a 7-inning game is set on the Game Context page
+
+# --- Official play-by-play (METRICS.md section 4) -----------------------------------------------
+# Fetched only when the operator pastes a box-score link and presses Fetch. Only that public page is
+# requested; nothing is sent. A saved copy of the page can be uploaded instead (the only way in the
+# browser test version).
+PBP_USER_AGENT = "gcsu-catalytics (GCSU Baseball report app)"
+PBP_TIMEOUT_S = 20
+
+# --- Situations (Clutch Score, RISP) ------------------------------------------------------------
+LATE_INNING = 7              # "7th inning or later"
+LATE_MARGIN = 2              # "game is within 2 runs"
+
+# --- Pitcher velo tiers (hitter report) ---------------------------------------------------------
+# A pitcher's tier comes from his average fastball velo over the games in the report.
+FASTBALL_TYPES = ["FF", "SI"]
+VELO_TIERS = [  # (tier, lowest average fastball velo in the tier, label); checked top to bottom
+    (1, 94.0, "94+ mph"),
+    (2, 90.0, "90–93.9"),
+    (3, 85.0, "85–89.9"),
+    (4, 80.0, "80–84.9"),
+    (5, 0.0, "79.9 or below"),
+]
+
+# --- Pitcher, Hitter and Clutch Scores (METRICS.md section 5) -----------------------------------
+# From the coaches' scoring sheet (Oct 2026). Each game is scored separately; a report shows the
+# average over its games. Each part earns its points in a straight line from `floor` (0 points) to
+# `goal` (all its points); past the goal it stays at full points. For a "lower is better" stat the
+# floor is above the goal. Floors were proposed by us and approved by the coaches (Oct 2026). A part
+# with no data in a game (no balls in play, say) is left out and the others are scaled up to 100.
+# Bonuses and penalties are then added, and the total is held between 1 and 100.
+SCORE_RANGE = (1, 100)
+
+PITCHER_SCORE_PARTS = [  # (key, label, points, floor, goal)
+    ("strike_pct", "Strike %", 20, 45.0, 65.0),
+    ("one_one_win_pct", "1-1 Count Win %", 15, 35.0, 65.0),
+    ("first_pitch_strike_pct", "1st-Pitch Strike %", 15, 40.0, 65.0),
+    ("whiff_pct", "Whiff %", 10, 5.0, 25.0),
+    ("chase_pct", "Chase %", 10, 10.0, 25.0),
+    ("k_minus_bb_pct", "K% − BB%", 15, -10.0, 20.0),
+    ("runs_allowed", "Runs Allowed", 15, 5.0, 0.0),
+]
+PITCHER_SCORE_ADJUSTMENTS = {  # key: (label, points each)
+    "bb_4_pitch": ("4-pitch walk", -5),
+    "bb_5_pitch": ("5-pitch walk", -3),
+    "hit_0_2": ("Hit on 0-2", -4),
+    "bb_after_0_2": ("Walk after 0-2", -8),
+    "hbp_0_2": ("HBP on 0-2", -6),
+    "out_3_pitches": ("Out in 3 pitches or fewer", 1),  # coaches lowered from 2 (Oct 2026)
+    "out_4_pitches": ("Out in 4 pitches", 1),
+    "inning_12": ("Inning of 12 pitches or fewer", 4),
+    "inning_15": ("Inning of 13–15 pitches", 2),
+    "one_two_three": ("1-2-3 inning", 4),
+}
+
+PITCHER_BONUS_CAP = 15   # most the bonuses can add in one game (coaches, Oct 2026); penalties uncapped
+
+HITTER_SCORE_PARTS = [
+    ("hard_hit_pct", "Hard Hit %", 35, 10.0, 40.0),
+    ("qab_pct", "QAB %", 30, 20.0, 60.0),
+    ("chase_pct", "Chase %", 25, 40.0, 10.0),
+    ("rbi", "RBIs", 10, 0.0, 4.0),
+]
+HITTER_SCORE_ADJUSTMENTS = {
+    "k_looking": ("K looking", -4),
+    "k_swinging": ("K swinging", -2),
+    "k_looking_risp": ("K looking, RISP", -8),
+    "k_swinging_risp": ("K swinging, RISP", -6),
+    "hbp": ("HBP", 5),
+    "hard_hit_0_2": ("Hard hit on 0-2", 3),
+    "hard_hit_1_2": ("Hard hit on 1-2", 1),
+    "bb_after_0_2": ("Walk after 0-2", 3),
+}
+
+CLUTCH_SCORE_PARTS = [
+    ("hl_hard_hit_pct", "HL Hard Hit %", 25, 10.0, 40.0),
+    ("hl_qab_pct", "HL QAB %", 25, 20.0, 60.0),
+    ("hl_obp", "HL OBP", 20, 0.200, 0.500),
+    ("hl_slg", "HL SLG", 15, 0.150, 0.600),
+    ("risp_rbi", "RISP Production (RBI)", 15, 0.0, 2.0),
+]
+CLUTCH_SCORE_ADJUSTMENTS = {
+    "hl_k": ("HL strikeout", -4),
+    "hl_k_looking": ("HL strikeout looking", -8),
+    "hl_dp": ("HL double play", -6),
+    "walk_off_hit": ("Walk-off hit", 10),
+    "go_ahead_rbi": ("Go-ahead RBI", 8),
+    "tying_rbi": ("Game-tying RBI", 6),
+    "two_out_rbi": ("Two-out RBI", 5),
+}

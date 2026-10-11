@@ -10,8 +10,8 @@ from metrics import hitting
 from reports import hitter as report
 from reports.tables import BREAKDOWN_COLS, HITTER_SPLIT_COLS
 from ui.common import (
-    footer, frame, get_conn, header, pdf_controls, report_filters, section, show_table, stat_table, thresholds_note,
-    tiles,
+    SCORES_NOTE, footer, frame, get_conn, header, pdf_controls, report_filters, score_breakdown, section, show_table,
+    stat_table, thresholds_note, tiles,
 )
 
 
@@ -34,16 +34,15 @@ def render() -> None:
     pdf_controls("hitter", r, df, f, len(roster))
 
     header("Individual Hitter Report", r.name, r.scope.season_text, r.scope.date_text,
-           f"Bats {r.bats_short} · {r.scope.games} game(s) · {r.scope.game_types_text}")
+           f"Bats {r.bats_short} · {r.scope.games} game(s) · {r.scope.game_types_text}", r.grades)
 
     k = r.key
-    section(1, "Key Performance Metrics", f"{k['PA']} PA · {k['AB']} AB · {k['H']} H · {k['BB']} BB · {k['K']} K")
-    tiles([("PA", k["PA"]), ("AVG", k["AVG"]), ("OBP", k["OBP"]), ("SLG", k["SLG"]), ("wOBA (MLB wts)", k["wOBA"]),
-           ("Hard Hit %", k["Hard Hit %"]), ("Avg Exit Velo", k["Avg Exit Velo"]),
-           ("Max Exit Velo", k["Max Exit Velo"]), ("Avg Launch Angle", k["Avg Launch Angle"])])
-    st.markdown('<div class="gc-foot">wOBA uses 2025 MLB weights (FanGraphs). Exit velo, launch angle and '
-                f"Hard Hit % use balls in play only; Hard Hit = {config.HARD_HIT_MPH:.0f} mph or harder. "
-                "n for exit-velo stats = tracked balls in play.</div>", unsafe_allow_html=True)
+    section(1, "Key Performance Metrics", report.key_note(k))
+    tiles([("PA", k["PA"]), ("AVG", k["AVG"]), ("OBP", k["OBP"]), ("SLG", k["SLG"]), ("OPS", k["OPS"]),
+           ("wOBA (MLB wts)", k["wOBA"]), ("QAB %", k["QAB %"]), ("Hard Hit %", k["Hard Hit %"]),
+           ("Avg Exit Velo", k["Avg Exit Velo"]), ("Max Exit Velo", k["Max Exit Velo"]),
+           ("Avg Launch Angle", k["Avg Launch Angle"])])
+    st.markdown(f'<div class="gc-foot">{report.key_footnote(k)}</div>', unsafe_allow_html=True)
 
     section(2, "Pitch Breakdown", "Seen % = % of pitches seen")
     star = "* fewer than 10 pitches. " if any(s.low for s in r.breakdown["Pitches"]) else ""
@@ -60,8 +59,11 @@ def render() -> None:
     c2.pyplot(zone_heatmap(r.zone_avg, "Strike Zone AVG", config.ZONE_AVG_SCALE, "at-bats"))
     c3.pyplot(ch.chase_map_chart(r.chase, r.sides))
 
-    section(4, "RHP vs LHP Splits")
-    show_table(stat_table(r.splits, HITTER_SPLIT_COLS, row_label=str, label_header="Split"),
-               "Max EV, Avg EV and HH % use tracked balls in play. BABIP = (H − HR) ÷ (AB − K − HR + SF).")
+    section(4, "Splits: Pitcher Hand & Velo Tier")
+    show_table(stat_table(r.splits, HITTER_SPLIT_COLS, row_label=str, label_header="Split"), report.SPLITS_NOTE)
+
+    section(5, "Scores", "1–100, from the coaches' scoring sheet")
+    score_breakdown(r.grades)
+    st.caption(SCORES_NOTE)
 
     footer(thresholds_note())

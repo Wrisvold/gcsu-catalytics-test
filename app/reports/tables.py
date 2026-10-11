@@ -1,6 +1,6 @@
 """Report tables as plain data: which text goes in each cell, where its n is printed, and whether it is
 greyed. The app renders these as HTML and the PDF as ReportLab tables, so both show n the same way
-(METRICS.md section 6)."""
+(METRICS.md section 7)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -44,9 +44,9 @@ PITCHER_SPLIT_COLS = [Col("PA", "PA", "plain"), Col("BAA", "BAA"), Col("K %", "K
 BREAKDOWN_COLS = [Col("Pitches", "Pitches", "count"), Col("Seen %", "Seen %"), Col("Swing %", "Swing %"),
                   Col("Whiff %", "Whiff %"), Col("Chase %", "Chase %"),
                   Col("Avg Exit Velo", "Avg EV (mph)"), Col("Avg Launch Angle", "Avg LA")]
-HITTER_SPLIT_COLS = [Col("PA", "PA", "plain"), Col("AVG", "AVG"), Col("Max EV", "Max EV"),
-                     Col("Avg EV", "Avg EV"), Col("HH %", "HH %"), Col("Whiff %", "Whiff %"),
-                     Col("Chase %", "Chase %"), Col("BABIP", "BABIP")]
+HITTER_SPLIT_COLS = [Col("PA", "PA", "plain"), Col("AVG", "AVG"), Col("HH %", "HH %"), Col("K %", "K %"),
+                     Col("BB %", "BB %"), Col("Whiff %", "Whiff %"), Col("Chase %", "Chase %"),
+                     Col("Avg EV", "Avg EV"), Col("Max EV", "Max EV"), Col("BABIP", "BABIP")]
 
 
 def build_table(df: pd.DataFrame, cols: list[Col], count_key: str | None = None) -> TableSpec:
