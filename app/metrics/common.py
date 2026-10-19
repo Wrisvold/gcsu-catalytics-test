@@ -342,20 +342,24 @@ def add_game_state(df: pd.DataFrame, boxes: dict | None) -> None:
     and `gs_code` / `gs_outs_on_play` (the official result and outs on the play) are set on the
     PA-ending pitch only.
 
-    Also `off_R` / `off_ER` (official runs and earned runs, on each pitcher's first pitch of a game)
-    and `off_line` (True on every pitch of a pitcher whose official line was found for that game).
+    Also `off_R` / `off_ER` (official runs and earned runs, on each pitcher's first pitch of a game),
+    `off_line` (True on every pitch of a pitcher whose official line was found for that game) and
+    `gs_coach` (True on every pitch of a game whose play-by-play is a coach sheet, `pbp.sheet`).
     """
     from pbp.match import match_game  # local: metrics stays importable without the pbp package loaded
+    from pbp.sheet import is_coach
 
     for col, default in GAME_STATE_DEFAULTS.items():
         df[col] = default
     df["off_R"] = 0
     df["off_ER"] = 0
     df["off_line"] = False
+    df["gs_coach"] = False
     for gid, box in (boxes or {}).items():
         in_game = df["GameID"] == gid
         if not in_game.any():
             continue
+        df.loc[in_game, "gs_coach"] = is_coach(box.source)
         m = match_game(df[in_game], box)
         if not m.pa_state.empty:
             st = m.pa_state.set_index("pa_id")
@@ -373,7 +377,7 @@ def add_game_state(df: pd.DataFrame, boxes: dict | None) -> None:
             first = mine.idxmax()
             df.loc[first, "off_R"] = line.r
             df.loc[first, "off_ER"] = line.er
-    for col in ("gs_known", "gs_on1", "gs_on2", "gs_on3", "gs_dp", "gs_advanced", "off_line"):
+    for col in ("gs_known", "gs_on1", "gs_on2", "gs_on3", "gs_dp", "gs_advanced", "off_line", "gs_coach"):
         df[col] = df[col].astype(bool)
     df["gs_rbi"] = df["gs_rbi"].fillna(0).astype(int)
     df["gs_code"] = df["gs_code"].astype(object).where(df["gs_code"].notna(), None)

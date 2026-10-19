@@ -8,6 +8,7 @@ from charts import pitching as cp
 from charts.zone import zone_heatmap
 from metrics import pitching
 from reports import pitcher as report
+from reports.context import pbp_note
 from reports.tables import PITCH_TYPE_COLS, PITCHER_SPLIT_COLS
 from ui.common import (
     SCORES_NOTE, footer, frame, get_conn, header, pdf_controls, report_filters, score_breakdown, section, show_table,
@@ -46,6 +47,8 @@ def show(r: report.PitcherReport, title: str = "Individual Pitcher Report") -> N
     """Header and sections 1–5, for one pitcher or (team page) a whole staff."""
     header(title, r.name, r.scope.season_text, r.scope.date_text,
            f"{r.throws_short} · {r.scope.games} game(s) · {r.scope.game_types_text}", r.grades)
+    if note := pbp_note(r.scope):
+        st.caption(note)
     if r.n_corrected:
         st.caption(f"{r.n_corrected} of these pitches are re-typed by coach corrections "
                    "(Pitch Type Corrections page).")

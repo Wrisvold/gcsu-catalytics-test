@@ -8,6 +8,7 @@ from charts import hitting as ch
 from charts.zone import zone_heatmap
 from metrics import hitting
 from reports import hitter as report
+from reports.context import pbp_note
 from reports.tables import BREAKDOWN_COLS, HITTER_SPLIT_COLS
 from ui.common import (
     SCORES_NOTE, footer, frame, get_conn, header, pdf_controls, report_filters, score_breakdown, section, show_table,
@@ -45,6 +46,8 @@ def show(r: report.HitterReport, title: str = "Individual Hitter Report", who: s
     """Header and sections 1–4, for one hitter or (team page) a whole lineup."""
     header(title, r.name, r.scope.season_text, r.scope.date_text,
            f"{who or 'Bats ' + r.bats_short} · {r.scope.games} game(s) · {r.scope.game_types_text}", r.grades)
+    if note := pbp_note(r.scope):
+        st.caption(note)
 
     k = r.key
     section(1, "Key Performance Metrics", report.key_note(k))

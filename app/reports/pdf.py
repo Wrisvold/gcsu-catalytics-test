@@ -37,7 +37,7 @@ from metrics.common import Stat
 from reports import hitter as hitter_report
 from reports import pitcher as pitcher_report
 from reports import team as team_report
-from reports.context import ReportFilters, Scope, fmt_date, thresholds_note
+from reports.context import ReportFilters, Scope, fmt_date, pbp_note, thresholds_note
 from reports.tables import (
     BREAKDOWN_COLS, HITTER_SPLIT_COLS, PITCH_TYPE_COLS, PITCHER_SPLIT_COLS, Col, build_table,
 )
@@ -282,9 +282,10 @@ def _footer(c: Canvas, note: str) -> float:
 
 
 def footer_note(scope: Scope, filters_note: str = "") -> str:
-    """Date range, game types, minimum-n thresholds and "Data: TrackMan." for every PDF footer."""
+    """Date range, game types, minimum-n thresholds and "Data: TrackMan." for every PDF footer, and a
+    note when any game's play-by-play is a coach sheet."""
     parts = [f"Dates: {scope.date_text}.", f"Game types: {scope.game_types_text}.", filters_note,
-             thresholds_note(), f"Printed {fmt_date(date.today().isoformat())}."]
+             pbp_note(scope), thresholds_note(), f"Printed {fmt_date(date.today().isoformat())}."]
     return " ".join(p for p in parts if p)
 
 

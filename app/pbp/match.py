@@ -51,6 +51,7 @@ class GameMatch:
     disagreements: list[str] = field(default_factory=list)
     unmatched_pitchers: list[str] = field(default_factory=list)
     replay_warnings: list[str] = field(default_factory=list)
+    pairs: dict[int, int] = field(default_factory=dict)   # official PA (index in replay().pas) -> TrackMan pa_id
 
     @property
     def ok(self) -> bool:
@@ -90,10 +91,14 @@ def _state_row(pa_id: int, p: PlateAppearance) -> dict:
 
 def match_game(game: pd.DataFrame, box: BoxScore) -> GameMatch:
     """`game` is one game's analysis frame (after PA grouping and outcomes)."""
+    from pbp.sheet import is_coach
+
     gid = str(game["GameID"].iloc[0])
     rep = replay(box)
+    kind = "coach sheet" if is_coach(box.source) else "official"
     ends = game[game["pa_end"]]
     official: dict[tuple[int, str], list[PlateAppearance]] = {}
+    index = {id(p): n for n, p in enumerate(rep.pas)}
     for p in rep.pas:
         official.setdefault((p.inning, p.half), []).append(p)
 
@@ -109,12 +114,13 @@ def match_game(game: pd.DataFrame, box: BoxScore) -> GameMatch:
         for i, j in pairs:
             t, p = tm.iloc[i], off[j]
             rows.append(_state_row(int(t["pa_id"]), p))
+            out.pairs[index[id(p)]] = int(t["pa_id"])
             if name_similarity(t["hitter"], p.batter) < MIN_NAME_SIMILARITY:
                 out.disagreements.append(f"{where}: TrackMan batter {t['hitter']} paired by order with "
                                          f"{p.batter}")
             if _kind(t["outcome"]) != _kind(p.code):
                 out.disagreements.append(f"{where}: {p.batter} — TrackMan {_PLAIN.get(t['outcome'], t['outcome'])}, "
-                                         f"official {_PLAIN.get(p.code, p.code)} (\"{p.text}\")")
+                                         f"{kind} {_PLAIN.get(p.code, p.code)} (\"{p.text}\")")
         paired_tm = {i for i, _ in pairs}
         paired_off = {j for _, j in pairs}
         out.unmatched_tm += [f"{where}: {n}" for i, n in enumerate(tm_names) if i not in paired_tm]

@@ -65,6 +65,7 @@ class Scope:
     last_date: str | None
     games: int
     game_types: list[str]
+    coach_pbp_games: int = 0          # games whose play-by-play is a coach sheet, not the official box score
 
     @property
     def date_text(self) -> str:
@@ -90,8 +91,18 @@ def scope_of(df: pd.DataFrame) -> Scope:
         return Scope(None, None, 0, [])
     dates = df["game_date"].dropna()
     types = sorted({t for t in df.get("game_type", []) if isinstance(t, str) and t})
+    coach = int(df.loc[df["gs_coach"], "GameID"].nunique()) if "gs_coach" in df else 0
     return Scope(dates.min() if len(dates) else None, dates.max() if len(dates) else None,
-                 int(df["GameID"].nunique()), types)
+                 int(df["GameID"].nunique()), types, coach)
+
+
+def pbp_note(scope: Scope) -> str:
+    """Says when some of the play-by-play is the coaches' own sheet. Empty when it is all official."""
+    if not scope.coach_pbp_games:
+        return ""
+    games = "1 game" if scope.coach_pbp_games == 1 else f"{scope.coach_pbp_games} games"
+    return (f"Play-by-play for {games} is from a coach sheet, not the official box score "
+            "(runners, score, RBI and results on those plate appearances).")
 
 
 def filters_text(f: ReportFilters) -> str:

@@ -68,9 +68,26 @@ class PlateAppearance:
 
 
 @dataclass
+class PlayRow:
+    """One row as replayed: where the batter and each runner ended up. `pbp.sheet` writes the coach
+    sheet from these."""
+    inning: int
+    half: str
+    batter: str               # "" on a row with no plate appearance (steal, wild pitch, ...)
+    code: str | None          # the PA's outcome code; None on a row with no plate appearance
+    rbi: int
+    batter_to: int | None     # 1-3, HOME or OUT; None on a row with no plate appearance
+    moves: dict[int, int]     # base a runner started the row on -> 1-3, HOME or OUT (runners who moved)
+    away: int                 # score after the row
+    home: int
+    text: str
+
+
+@dataclass
 class Replay:
     pas: list[PlateAppearance] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    rows: list[PlayRow] = field(default_factory=list)
 
 
 def _norm(name: str) -> str:
@@ -174,10 +191,10 @@ class _Bases:
         return None
 
 
-def replay_half(h: HalfInning, start: tuple[int, int], final_half: bool) -> tuple[list[PlateAppearance], list[str],
-                                                                                    tuple[int, int]]:
+def replay_half(h: HalfInning, start: tuple[int, int], final_half: bool, rows: list[PlayRow] | None = None
+                ) -> tuple[list[PlateAppearance], list[str], tuple[int, int]]:
     """Replay one half-inning from the score `start` = (away, home). Returns its plate appearances,
-    warnings, and the score after it."""
+    warnings, and the score after it. Each play's row (not substitutions) is added to `rows` if given."""
     where = f"{h.half} {h.inning}"
     bat = 0 if h.half == "Top" else 1
     bases, outs, score = _Bases(), 0, list(start)
@@ -212,6 +229,8 @@ def replay_half(h: HalfInning, start: tuple[int, int], final_half: bool) -> tupl
         new = dict(bases.b)
         for k, _ in moves:
             new[k] = None
+        final = dict(moves)                                   # starting base -> where the runner ended
+        holder = {b: b for b in (1, 2, 3) if new[b] is not None}   # base now -> base the runner started on
         for k, to in moves:
             if to == HOME:
                 runs += 1
@@ -221,6 +240,7 @@ def replay_half(h: HalfInning, start: tuple[int, int], final_half: bool) -> tupl
                 if new[to] is not None:
                     warnings.append(f"{where}: two runners on base {to} after \"{text}\"")
                 new[to] = bases.b[k]
+                holder[to] = k
             advanced |= to == HOME or (to != OUT and to > k)
         code = rbi = None
         batter = ""
@@ -243,10 +263,14 @@ def replay_half(h: HalfInning, start: tuple[int, int], final_half: bool) -> tupl
                     while top < 3 and new[top + 1] is not None:
                         top += 1
                     for b in range(top, dest - 1, -1):
+                        who = holder.pop(b, None)
                         if b == 3:
                             runs += 1
                         else:
                             new[b + 1] = new[b]
+                            holder[b + 1] = who
+                        if who is not None:
+                            final[who] = HOME if b == 3 else b + 1
                         new[b] = None
                 new[dest] = batter
             m = _RBI.search(first)
@@ -260,6 +284,9 @@ def replay_half(h: HalfInning, start: tuple[int, int], final_half: bool) -> tupl
         else:
             after = list(score)
             after[bat] += runs
+        if rows is not None:
+            rows.append(PlayRow(h.inning, h.half, batter, code, rbi or 0, dest if pa else None,
+                                {k: to for k, to in final.items() if to != k}, after[0], after[1], text))
         if pa:
             count = COUNT.search(first)
             pas.append(PlateAppearance(
@@ -285,7 +312,7 @@ def replay(box: BoxScore) -> Replay:
     score = (0, 0)
     played = [h for h in box.halves if h.rows]
     for i, h in enumerate(played):
-        pas, warnings, score = replay_half(h, score, final_half=i == len(played) - 1)
+        pas, warnings, score = replay_half(h, score, final_half=i == len(played) - 1, rows=out.rows)
         out.pas += pas
         out.warnings += warnings
     if box.away_runs is not None and score != (box.away_runs, box.home_runs):

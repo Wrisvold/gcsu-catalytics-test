@@ -10,6 +10,8 @@ import ingest
 from metrics.common import prepare
 from pbp.boxscore import BoxScore, BoxScoreError, parse_html
 from pbp.match import GameMatch, match_game
+from pbp.sheet import HELP as SHEET_HELP
+from pbp.sheet import SheetError, is_coach, read_sheet, sheet_from_box, sheet_from_trackman, to_csv_bytes, trackman_teams
 from reports.context import fmt_date
 from ui.common import game_label, get_conn, header
 
@@ -102,13 +104,26 @@ def game_form(conn, g: pd.Series, key: str) -> None:
             st.rerun()
 
 
-def _pbp_summary(conn, gid: str) -> tuple[GameMatch, BoxScore] | None:
+def _trackman(conn, gid: str) -> pd.DataFrame:
+    """The game's analysis frame from TrackMan alone (no play-by-play applied)."""
+    return prepare(db.query_pitches(conn, game_ids=[gid]), db.get_rules(conn), db.get_overrides(conn))
+
+
+def _stored_box(conn, gid: str) -> BoxScore | None:
     stored = db.get_play_by_play(conn, [gid]).get(gid)
-    if not stored:
-        return None
-    box = BoxScore.from_json(stored["box_json"])
-    df = prepare(db.query_pitches(conn, game_ids=[gid]), db.get_rules(conn), db.get_overrides(conn))
-    return match_game(df, box), box
+    return BoxScore.from_json(stored["box_json"]) if stored else None
+
+
+def _pbp_summary(conn, gid: str) -> tuple[GameMatch, BoxScore] | None:
+    box = _stored_box(conn, gid)
+    return (match_game(_trackman(conn, gid), box), box) if box else None
+
+
+def _different_game(m: GameMatch, box: BoxScore, what: str) -> str | None:
+    if m.tm_pas and m.matched < 0.5 * m.tm_pas:
+        return (f"This {what} ({box.away} at {box.home}) matched only {m.matched} of TrackMan's {m.tm_pas} "
+                "plate appearances, so it looks like a different game. Not saved.")
+    return None
 
 
 def _save_pbp(conn, gid: str, page: str, source: str) -> None:
@@ -118,24 +133,73 @@ def _save_pbp(conn, gid: str, page: str, source: str) -> None:
     except BoxScoreError as e:
         st.session_state[f"pbp-msg-{gid}"] = ("error", str(e))
         return
-    df = prepare(db.query_pitches(conn, game_ids=[gid]), db.get_rules(conn), db.get_overrides(conn))
-    m = match_game(df, box)
-    if m.tm_pas and m.matched < 0.5 * m.tm_pas:
-        st.session_state[f"pbp-msg-{gid}"] = (
-            "error", f"This box score ({box.away} at {box.home}) matched only {m.matched} of TrackMan's {m.tm_pas} "
-                     "plate appearances, so it looks like a different game. Not saved.")
+    if problem := _different_game(match_game(_trackman(conn, gid), box), box, "box score"):
+        st.session_state[f"pbp-msg-{gid}"] = ("error", problem)
         return
     db.set_play_by_play(conn, gid, box.to_json(), source)
     st.session_state[f"pbp-msg-{gid}"] = ("success", f"Play-by-play saved: {box.away} {box.away_runs} at "
                                                      f"{box.home} {box.home_runs}.")
 
 
-def pbp_panel(conn, g: pd.Series, key: str) -> None:
-    """Load, check and remove the game's official play-by-play."""
+def _save_sheet(conn, gid: str, data: bytes, name: str) -> None:
+    """Read a coach play-by-play sheet and store it in place of the game's play-by-play. When it replaces
+    an official box score, that box score's team names and pitching lines (official R / ER) are kept."""
+    old = _stored_box(conn, gid)
+    tm = _trackman(conn, gid)
+    away, home = (old.away, old.home) if old else trackman_teams(tm)
+    try:
+        res = read_sheet(data, away, home, old.pitching if old else None, name)
+    except SheetError as e:
+        st.session_state[f"pbp-msg-{gid}"] = ("error", "The sheet wasn't loaded. Fix these rows and load it "
+                                              "again:\n" + "\n".join(f"- {p}" for p in e.problems))
+        return
+    box = res.box
+    m = match_game(tm, box)
+    if problem := _different_game(m, box, "sheet"):
+        st.session_state[f"pbp-msg-{gid}"] = ("error", problem)
+        return
+    db.set_play_by_play(conn, gid, box.to_json(), box.source)
+    text = f"Coach play-by-play saved: {box.away} {box.away_runs} at {box.home} {box.home_runs}."
+    if old and old.away_runs is not None and (old.away_runs, old.home_runs) != (box.away_runs, box.home_runs):
+        text += (f" The play-by-play it replaced had a final score of {old.away_runs}-{old.home_runs}; "
+                 "the pitching lines (R / ER) are still that box score's.")
+    if warnings := res.warnings + m.replay_warnings:
+        st.session_state[f"pbp-msg-{gid}"] = ("warning", text + " It is saved, but check these:\n"
+                                              + "\n".join(f"- {w}" for w in warnings))
+    else:
+        st.session_state[f"pbp-msg-{gid}"] = ("success", text)
+
+
+def sheet_panel(conn, g: pd.Series, key: str) -> None:
+    """Download the coach play-by-play sheet and load it back. CSV both ways: Excel opens it, and it works
+    in the browser test version, where the table editor doesn't."""
     gid = g["game_id"]
-    st.markdown("**Official play-by-play** — runners on base, score, RBI and earned runs, which TrackMan "
-                "doesn't record. Needed for the Clutch Score, RBIs and RISP in the Hitter Score, and official "
-                "R / ER.")
+    box = _stored_box(conn, gid)
+    st.markdown("**Coach play-by-play sheet** — for a game with no official box score (a scrimmage), or to "
+                "fix the official one. Download the sheet, fill it in or correct it in Excel, save it as CSV "
+                "and load it here. It replaces the play-by-play above, and reports say it is a coach sheet.")
+    st.caption(SHEET_HELP + " Runs, outs and the score are counted from the moves. The pitcher and tm_ columns "
+               "are TrackMan's, for reference only.")
+    tm = _trackman(conn, gid)
+    sheet = sheet_from_box(box, tm) if box else sheet_from_trackman(tm)
+    c1, c2 = st.columns(2)
+    c1.download_button("Download play-by-play sheet", to_csv_bytes(sheet), file_name=f"play-by-play-{gid}.csv",
+                       mime="text/csv", key=f"{key}-sheet-dl",
+                       help=("Pre-filled from the play-by-play loaded above." if box else
+                             "Pre-filled from TrackMan: one row per plate appearance with TrackMan's result. "
+                             "Add the runner moves and RBIs."))
+    up = c2.file_uploader("Load a filled-in sheet (CSV)", type=["csv"], key=f"{key}-sheet-file")
+    if up is not None and c2.button("Load sheet", key=f"{key}-sheet-load"):
+        _save_sheet(conn, gid, up.getvalue(), up.name)
+        st.rerun()
+
+
+def pbp_panel(conn, g: pd.Series, key: str) -> None:
+    """Load, check and remove the game's play-by-play (official, or the coaches' sheet)."""
+    gid = g["game_id"]
+    st.markdown("**Play-by-play** — runners on base, score, RBI and earned runs, which TrackMan doesn't "
+                "record. Needed for the Clutch Score, RBIs and RISP in the Hitter Score, and official R / ER. "
+                "Load the official box score here, or use the coach sheet below.")
     if msg := st.session_state.pop(f"pbp-msg-{gid}", None):
         getattr(st, msg[0])(msg[1])
     found = _pbp_summary(conn, gid)
@@ -143,13 +207,19 @@ def pbp_panel(conn, g: pd.Series, key: str) -> None:
         m, box = found
         stored = db.get_play_by_play(conn, [gid])[gid]
         icon = ":material/check_circle:" if m.ok else ":material/warning:"
+        coach = is_coach(stored["source"])
+        kind = "coach sheet" if coach else "official"
         st.markdown(f"{icon} {box.away} {box.away_runs} at {box.home} {box.home_runs} · matched **{m.matched} of "
-                    f"{m.tm_pas}** TrackMan plate appearances ({m.official_pas} official) · from "
+                    f"{m.tm_pas}** TrackMan plate appearances ({m.official_pas} {kind}) · from "
                     f"{stored['source']}")
+        if coach:
+            st.caption("This is the coaches' own play-by-play, not the official box score; reports say so. "
+                       + ("R / ER are from the official pitching lines it replaced." if box.pitching else
+                          "R is TrackMan's and ER isn't known (no official pitching lines)."))
         problems = [("Play-by-play checks", m.replay_warnings),
-                    ("TrackMan and the official scoring disagree", m.disagreements),
-                    ("TrackMan plate appearances with no official match", m.unmatched_tm),
-                    ("Official plate appearances not in TrackMan", m.unmatched_official),
+                    (f"TrackMan and the {kind} scoring disagree", m.disagreements),
+                    (f"TrackMan plate appearances with no {kind} match", m.unmatched_tm),
+                    (f"{kind.capitalize()} plate appearances not in TrackMan", m.unmatched_official),
                     ("Official pitchers not found in TrackMan (their R / ER isn't used)", m.unmatched_pitchers)]
         for title, items in problems:
             if items:
@@ -179,6 +249,8 @@ def pbp_panel(conn, g: pd.Series, key: str) -> None:
     if up is not None and c2.button("Load uploaded page", key=f"{key}-pbp-load"):
         _save_pbp(conn, gid, up.getvalue().decode("utf-8", errors="replace"), up.name)
         st.rerun()
+    st.divider()
+    sheet_panel(conn, g, key)
 
 
 def _games_table(conn) -> pd.DataFrame:
@@ -190,7 +262,8 @@ def _games_table(conn) -> pd.DataFrame:
         "H/A": games["home_away"], "Temp °F": games["temp_f"], "Humidity %": games["humidity_pct"],
         "Wind mph": games["wind_mph"], "Wind dir": games["wind_dir"], "Stadium": games["stadium"],
         "Weather from": games["weather_source"], "Pitches": games["game_id"].map(counts),
-        "Play-by-play": games["game_id"].map(lambda gid: "yes" if gid in pbp else ""),
+        "Play-by-play": games["game_id"].map(
+            lambda gid: ("coach sheet" if is_coach(pbp[gid]["source"]) else "official") if gid in pbp else ""),
         "GameID": games["game_id"],
     })
 
@@ -256,7 +329,8 @@ def context_page() -> None:
         st.info("No games yet. Load a TrackMan CSV on the **Load Data** page.")
         return
     st.markdown("TrackMan files don't include game type, opponent, home/away, weather or the game situation "
-                "(runners, score, RBI). Enter the details here and load the official play-by-play below; reports "
+                "(runners, score, RBI). Enter the details here and load the play-by-play below (the official box "
+                "score, or the coaches' own sheet); reports "
                 "can then be filtered by game type, home/away and temperature.")
     st.dataframe(_games_table(conn), hide_index=True)
     g = games.sort_values(["game_date", "game_id"], ascending=False).set_index("game_id", drop=False)
