@@ -14,7 +14,10 @@ import config
 import db
 from metrics.common import Stat
 from reports.context import ReportFilters, filters_text, fmt_date, load_frame, thresholds_note  # noqa: F401
-from reports.pdf import batch_export, batch_zip, export_filename, pdf_bytes
+from reports.pdf import (
+    batch_export, batch_pdf, batch_pdf_filename, batch_zip, export_filename, has_other_teams, pdf_bytes,
+    roster_ids,
+)
 from reports.tables import Col, build_table
 
 CSS = f"""
@@ -251,17 +254,27 @@ def report_filters(conn) -> ReportFilters | None:
 # --- PDF export ---------------------------------------------------------------------------------
 
 def pdf_controls(kind: str, report, df: pd.DataFrame, f: ReportFilters, roster_size: int) -> None:
-    """Sidebar buttons: download this player's PDF, or save one PDF per player to exports/."""
+    """Sidebar buttons: download this player's PDF, one print-ready PDF of the whole team, or one
+    PDF per player saved to exports/."""
     sb = st.sidebar
     sb.markdown("### PDF")
     note = filters_text(f)
     plural = "pitchers" if kind == "pitcher" else "hitters"
+    gcsu_only = (sb.checkbox("Print file: GCSU players only", value=True, key=f"print_gcsu_{kind}",
+                             help="Leave the other team's players out of the print file.")
+                 if has_other_teams(df, kind) else False)
+    team_n = len(roster_ids(df, kind, gcsu_only))
     if config.DEMO_MODE:
-        _demo_pdf_controls(kind, report, df, f, note, plural, roster_size)
+        _demo_pdf_controls(kind, report, df, f, note, plural, roster_size, gcsu_only, team_n)
         return
     sb.download_button("Download this report", data=lambda: pdf_bytes(kind, report, note),
                        file_name=export_filename(kind, report.name, report.scope), mime="application/pdf",
                        icon=":material/picture_as_pdf:", type="primary", on_click="ignore")
+    if team_n:
+        sb.download_button(f"Print file: all {team_n} {plural} (one PDF)",
+                           data=lambda: batch_pdf(df, kind, note, gcsu_only),
+                           file_name=batch_pdf_filename(kind, df), mime="application/pdf",
+                           icon=":material/print:", on_click="ignore", help=PRINT_HELP)
     if sb.button(f"Save all {roster_size} {plural} to exports/", help="One PDF per player for the current "
                  "filters, saved in the exports folder. Re-exporting the same report overwrites it."):
         with st.spinner(f"Writing {roster_size} PDFs…"):
@@ -269,14 +282,19 @@ def pdf_controls(kind: str, report, df: pd.DataFrame, f: ReportFilters, roster_s
         sb.success(f"Saved {len(paths)} PDFs to {config.EXPORT_DIR}")
 
 
+PRINT_HELP = "Every player's report in one PDF, one page each, in name order: open it and print once."
+
+
 def _demo_pdf_controls(kind: str, report, df: pd.DataFrame, f: ReportFilters, note: str, plural: str,
-                       roster_size: int) -> None:
+                       roster_size: int, gcsu_only: bool, team_n: int) -> None:
     """Browser test version: build first, then download. stlite can't serve a download that is built
     when it's clicked, and there is no exports folder, so the whole team comes as one zip file."""
     sb = st.sidebar
     player_id = getattr(report, "pitcher_id", None) or getattr(report, "hitter_id", "")
-    one_key = ("pdf", kind, player_id, dataclasses.astuple(f), db.data_version(get_conn()))
-    all_key = ("zip", kind, dataclasses.astuple(f), db.data_version(get_conn()))
+    version = db.data_version(get_conn())
+    one_key = ("pdf", kind, player_id, dataclasses.astuple(f), version)
+    print_key = ("print", kind, gcsu_only, dataclasses.astuple(f), version)
+    all_key = ("zip", kind, dataclasses.astuple(f), version)
     made = st.session_state.setdefault("demo_pdfs", {})
     if one_key in made:
         sb.download_button("Save this report (PDF)", data=made[one_key], type="primary",
@@ -285,6 +303,15 @@ def _demo_pdf_controls(kind: str, report, df: pd.DataFrame, f: ReportFilters, no
     elif sb.button("Make PDF of this report", type="primary", icon=":material/picture_as_pdf:"):
         with st.spinner("Making the PDF…"):
             made[one_key] = pdf_bytes(kind, report, note)
+        st.rerun()
+    if team_n and print_key in made:
+        sb.download_button(f"Save print file: all {team_n} {plural} (PDF)", data=made[print_key],
+                           file_name=batch_pdf_filename(kind, df), mime="application/pdf",
+                           icon=":material/print:", on_click="ignore", help=PRINT_HELP)
+    elif team_n and sb.button(f"Make print file: all {team_n} {plural}", icon=":material/print:",
+                              help=PRINT_HELP + " Takes about a second per player."):
+        with st.spinner(f"Making {team_n} pages…"):
+            made[print_key] = batch_pdf(df, kind, note, gcsu_only)
         st.rerun()
     if all_key in made:
         sb.download_button(f"Save all {roster_size} {plural} (.zip)", data=made[all_key],

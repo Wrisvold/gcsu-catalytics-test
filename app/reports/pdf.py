@@ -375,26 +375,29 @@ def _draw_hitter(c: Canvas, r: hitter_report.HitterReport, filters_note: str) ->
     return _draw(c, y, splits_note) - bottom
 
 
-def _render(draw, report, title: str, out, filters_note: str) -> float:
-    """Draw one page and return the room left above the footer in points (negative = overlap)."""
+def _render(pages: list, title: str, out, filters_note: str) -> list[float]:
+    """Draw (draw, report) pages into one PDF. Returns the room left above each footer in points
+    (negative = overlap)."""
     c = Canvas(out, pagesize=letter, pageCompression=1)
     c.setTitle(f"{config.APP_TITLE} — {title}")
     c.setAuthor(config.APP_TITLE)
     c.setCreator(config.APP_TITLE)
-    slack = draw(c, report, filters_note)
-    c.showPage()
+    slack = []
+    for draw, report in pages:
+        slack.append(draw(c, report, filters_note))
+        c.showPage()
     c.save()
     return slack
 
 
 def pitcher_pdf(r: pitcher_report.PitcherReport, out, filters_note: str = "") -> float:
     """Write one pitcher's one-page report to `out` (a path or a binary file object)."""
-    return _render(_draw_pitcher, r, f"{r.name}, pitcher report", out, filters_note)
+    return _render([(_draw_pitcher, r)], f"{r.name}, pitcher report", out, filters_note)[0]
 
 
 def hitter_pdf(r: hitter_report.HitterReport, out, filters_note: str = "") -> float:
     """Write one hitter's one-page report to `out` (a path or a binary file object)."""
-    return _render(_draw_hitter, r, f"{r.name}, hitter report", out, filters_note)
+    return _render([(_draw_hitter, r)], f"{r.name}, hitter report", out, filters_note)[0]
 
 
 def pdf_bytes(kind: str, report, filters_note: str = "") -> bytes:
@@ -410,17 +413,36 @@ def export_filename(kind: str, name: str, scope: Scope) -> str:
     return f"{kind}_{who}_{dates}.pdf"
 
 
+def _kind(kind: str):
+    """(roster, build, write, draw) for kind "pitcher" or "hitter"."""
+    if kind == "pitcher":
+        return pitching.list_pitchers, "PitcherId", "PitcherTeam", pitcher_report.build, pitcher_pdf, _draw_pitcher
+    return hitting.list_hitters, "hitter_id", "BatterTeam", hitter_report.build, hitter_pdf, _draw_hitter
+
+
+def roster_ids(df: pd.DataFrame, kind: str, gcsu_only: bool = False) -> list[str]:
+    """Every pitcher or hitter in the filtered frame, by TrackMan name (Last, First). With `gcsu_only`,
+    only players who pitched or batted for GCSU (config.TEAM_CODE), leaving out the other team."""
+    list_fn, id_col, team_col, *_ = _kind(kind)
+    if gcsu_only:
+        df = df[df[team_col] == config.TEAM_CODE]
+    return [str(i) for i in list_fn(df)[id_col]]
+
+
+def has_other_teams(df: pd.DataFrame, kind: str) -> bool:
+    """True when the frame has pitchers (or hitters) who aren't GCSU, i.e. an outside game."""
+    team_col = _kind(kind)[2]
+    return bool((df[team_col] != config.TEAM_CODE).any())
+
+
 def batch_export(df: pd.DataFrame, kind: str, out_dir: Path | None = None, filters_note: str = "",
                  ids: list[str] | None = None) -> list[Path]:
     """One PDF per pitcher (kind="pitcher") or hitter (kind="hitter") in the filtered frame, or only
     the given ids. Files go to exports/ and are overwritten when the same report is exported again."""
     out_dir = Path(out_dir or config.EXPORT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
-    if kind == "pitcher":
-        roster, build, write = pitching.list_pitchers(df)["PitcherId"], pitcher_report.build, pitcher_pdf
-    else:
-        roster, build, write = hitting.list_hitters(df)["hitter_id"], hitter_report.build, hitter_pdf
-    ids = list(roster) if ids is None else ids
+    *_, build, write, _ = _kind(kind)
+    ids = roster_ids(df, kind) if ids is None else ids
     paths = []
     for pid in ids:
         r = build(df, pid)
@@ -434,19 +456,36 @@ def batch_export(df: pd.DataFrame, kind: str, out_dir: Path | None = None, filte
 
 def batch_zip(df: pd.DataFrame, kind: str, filters_note: str = "") -> bytes:
     """The same one-PDF-per-player export as batch_export, returned as one zip file in memory."""
-    if kind == "pitcher":
-        roster, build, write = pitching.list_pitchers(df)["PitcherId"], pitcher_report.build, pitcher_pdf
-    else:
-        roster, build, write = hitting.list_hitters(df)["hitter_id"], hitter_report.build, hitter_pdf
+    *_, build, write, _ = _kind(kind)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for pid in roster:
+        for pid in roster_ids(df, kind):
             r = build(df, pid)
             if r is not None:
                 pdf = io.BytesIO()
                 write(r, pdf, filters_note)
                 z.writestr(export_filename(kind, r.name, r.scope), pdf.getvalue())
     return buf.getvalue()
+
+
+def batch_pdf(df: pd.DataFrame, kind: str, filters_note: str = "", gcsu_only: bool = True,
+              ids: list[str] | None = None) -> bytes:
+    """Every player's one-page report in a single PDF, one page each in name order, ready to print
+    in one go. GCSU players only by default, so an outside game doesn't print the other team."""
+    *_, build, _, draw = _kind(kind)
+    ids = roster_ids(df, kind, gcsu_only) if ids is None else ids
+    pages = [(draw, r) for r in (build(df, pid) for pid in ids) if r is not None]
+    buf = io.BytesIO()
+    plural = "pitchers" if kind == "pitcher" else "hitters"
+    _render(pages, f"all {plural}", buf, filters_note)
+    return buf.getvalue()
+
+
+def batch_pdf_filename(kind: str, df: pd.DataFrame) -> str:
+    """e.g. all_pitchers_2026-10-23.pdf, or all_hitters_2026-10-01_to_2026-10-31.pdf."""
+    dates = sorted(d for d in df["game_date"].dropna().astype(str)) if "game_date" in df else []
+    span = "" if not dates else f"_{dates[0]}" if dates[0] == dates[-1] else f"_{dates[0]}_to_{dates[-1]}"
+    return f"all_{'pitchers' if kind == 'pitcher' else 'hitters'}{span}.pdf"
 
 
 def main(argv: list[str] | None = None) -> None:
