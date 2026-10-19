@@ -56,10 +56,16 @@ def build(df: pd.DataFrame, pitcher_id: str) -> PitcherReport | None:
     p = pitching.for_pitcher(df, pitcher_id)
     if p.empty:
         return None
+    return assemble(p, str(pitcher_id), display_name(p["Pitcher"].iloc[-1]), p["PitcherThrows"].iloc[-1],
+                    scores.pitcher_scores(df, pitcher_id))
+
+
+def assemble(p: pd.DataFrame, pitcher_id: str, name: str, throws: str, score: scores.ScoreSummary) -> PitcherReport:
+    """The report for the pitches in `p` (one pitcher's, or a whole staff's for the team report)."""
     return PitcherReport(
-        pitcher_id=str(pitcher_id),
-        name=display_name(p["Pitcher"].iloc[-1]),
-        throws=p["PitcherThrows"].iloc[-1],
+        pitcher_id=pitcher_id,
+        name=name,
+        throws=throws,
         scope=scope_of(p),
         line=pitching.performance_line(p),
         table=pitching.pitch_type_table(p),
@@ -69,5 +75,5 @@ def build(df: pd.DataFrame, pitcher_id: str) -> PitcherReport | None:
         whiffs=pitching.whiff_locations(p),
         splits=pitching.hitter_splits(p),
         n_corrected=int(p["pitch_type_corrected"].sum()),
-        score=scores.pitcher_scores(df, pitcher_id),
+        score=score,
     )

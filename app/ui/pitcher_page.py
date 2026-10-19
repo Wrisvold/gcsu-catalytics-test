@@ -33,11 +33,21 @@ def render() -> None:
         st.warning("This pitcher threw no pitches in the selected games.")
         return
     pdf_controls("pitcher", r, df, f, len(roster))
+    show(r)
 
-    header("Individual Pitcher Report", r.name, r.scope.season_text, r.scope.date_text,
+    section(6, "Pitcher Score", "1–100, from the coaches' scoring sheet")
+    score_breakdown(r.grades)
+    st.caption(SCORES_NOTE)
+
+    footer(thresholds_note())
+
+
+def show(r: report.PitcherReport, title: str = "Individual Pitcher Report") -> None:
+    """Header and sections 1–5, for one pitcher or (team page) a whole staff."""
+    header(title, r.name, r.scope.season_text, r.scope.date_text,
            f"{r.throws_short} · {r.scope.games} game(s) · {r.scope.game_types_text}", r.grades)
     if r.n_corrected:
-        st.caption(f"{r.n_corrected} of this pitcher's pitches are re-typed by coach corrections "
+        st.caption(f"{r.n_corrected} of these pitches are re-typed by coach corrections "
                    "(Pitch Type Corrections page).")
 
     section(1, "Game Summary", f"{r.line['pitches']} pitches")
@@ -74,9 +84,3 @@ def render() -> None:
     show_table(stat_table(r.splits, PITCHER_SPLIT_COLS, row_label=str, label_header="Split"),
                "Hitter side is the batter who finished each plate appearance. GB % and FB % use TaggedHitType; "
                "FB % includes popups.")
-
-    section(6, "Pitcher Score", "1–100, from the coaches' scoring sheet")
-    score_breakdown(r.grades)
-    st.caption(SCORES_NOTE)
-
-    footer(thresholds_note())

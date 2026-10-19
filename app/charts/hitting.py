@@ -9,7 +9,7 @@ from matplotlib.patches import Polygon
 
 import config
 from charts.base import (
-    LABEL_SIZE, SMALL_SIZE, clip_to_window, draw_zone, empty_message, footnote, heat, location_axes,
+    LABEL_SIZE, SMALL_SIZE, clip_to_window, draw_zone, empty_message, footnote, footnote_under, heat, location_axes,
     new_figure, pitch_color, title,
 )
 from metrics.common import Stat
@@ -69,12 +69,13 @@ def spray_chart(spray: SprayData, width_in: float = 3.0, height_in: float = 3.3)
     ax.set_aspect("equal")
     ax.axis("off")
     title(ax, "Spray Chart", f"Balls in play: {spray.n_bip} · ▲ = ground ball, drawn on the infield arc")
+    legend = None
     if handles:
-        ax.legend(handles=handles, fontsize=SMALL_SIZE, loc="upper center", bbox_to_anchor=(0.5, 0.02),
-                  ncol=min(5, len(handles)), frameon=False, handletextpad=0.1, columnspacing=0.6)
-    if spray.n_missing:
-        footnote(fig, f"{spray.n_missing} ball(s) in play not plotted: no Bearing or Distance")
+        legend = ax.legend(handles=handles, fontsize=SMALL_SIZE, loc="upper center", bbox_to_anchor=(0.5, 0.02),
+                           ncol=min(5, len(handles)), frameon=False, handletextpad=0.1, columnspacing=0.6)
     fig.subplots_adjust(left=0.02, right=0.98, top=0.88, bottom=0.12)
+    if spray.n_missing:
+        footnote_under(fig, legend, f"{spray.n_missing} ball(s) in play not plotted: no Bearing or Distance")
     return fig
 
 
@@ -89,28 +90,31 @@ def contact_chart(contact: ContactData, width_in: float = 3.0, height_in: float 
                          facecolor="white", edgecolor=config.NAVY, lw=1))
     front = config.CONTACT_OUT_FRONT_FT
     ax.axhline(front, color=config.GREEN, lw=0.8, ls="--")
-    ax.text(1.95, front + 0.04, "front of plate", ha="right", va="bottom", fontsize=SMALL_SIZE, color=config.GREEN)
+    ax.text(0.99, front + 0.04, "front of plate", transform=ax.get_yaxis_transform(), ha="right", va="bottom",
+            fontsize=SMALL_SIZE, color=config.GREEN)
     pts = contact.points
     for _, p in pts.iterrows():
         face = heat(p["ev"], config.ZONE_EV_SCALE) if pd.notna(p["ev"]) else config.LOW_SAMPLE_GREY
         ax.scatter(p["x"], p["y"], s=26, color=face, edgecolor=config.NAVY, lw=0.4, zorder=5)
     if pts.empty:
         empty_message(ax, "No contact data")
-    ax.text(-1.95, 3.85, "Inside / pull", ha="left", va="top", fontsize=SMALL_SIZE, color="#555555")
-    ax.text(1.95, 3.85, "Away / oppo", ha="right", va="top", fontsize=SMALL_SIZE, color="#555555")
-    ax.text(0, 3.85, "▲ pitcher", ha="center", va="top", fontsize=SMALL_SIZE, color="#555555")
-    for y, s, label in [(-0.3, contact.out_front_ev, "Out front"), (-0.62, contact.deep_ev, "Deep")]:
-        ax.text(0, y, f"{label}: {_ev_text(s)}", ha="center", va="center", fontsize=LABEL_SIZE,
-                color=config.LOW_SAMPLE_TEXT if s.low else config.NAVY,
-                fontweight="normal" if s.low else "bold")
-    ax.set_xlim(-2, 2)
-    ax.set_ylim(-0.85, 3.9)
-    ax.set_aspect("equal")
+    for x, ha, text in [(0.0, "left", "Inside / pull"), (0.5, "center", "▲ pitcher"), (1.0, "right", "Away / oppo")]:
+        ax.text(x, 0.99, text, transform=ax.transAxes, ha=ha, va="top", fontsize=SMALL_SIZE, color="#555555")
+    last = None
+    for i, (s, label) in enumerate([(contact.out_front_ev, "Out front"), (contact.deep_ev, "Deep")]):
+        last = ax.annotate(f"{label}: {_ev_text(s)}", (0.5, 0.0), xycoords="axes fraction",
+                           xytext=(0, -2 - 9.5 * i), textcoords="offset points", ha="center", va="top",
+                           fontsize=LABEL_SIZE, color=config.LOW_SAMPLE_TEXT if s.low else config.NAVY,
+                           fontweight="normal" if s.low else "bold", annotation_clip=False)
+    # The view (4 ft wide, plate to 4 ft out) as data limits, so a wide cell widens it instead of shrinking it.
+    ax.plot([-2, 2], [-0.1, 4.1], alpha=0)
+    ax.margins(0)
+    ax.set_aspect("equal", adjustable="datalim")
     ax.axis("off")
     title(ax, "Contact Point", f"Balls in play with contact data: {contact.n} · lefties mirrored")
-    footnote(fig, "Avg exit velo of tracked balls; grey text = fewer than "
-                  f"{config.MIN_N['contact_group']}. Dot color = exit velo.")
-    fig.subplots_adjust(left=0.02, right=0.98, top=0.88, bottom=0.08)
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.88, bottom=0.2)
+    footnote_under(fig, last, "Avg exit velo of tracked balls; grey text = fewer than "
+                              f"{config.MIN_N['contact_group']}. Dot color = exit velo.")
     return fig
 
 
@@ -157,9 +161,10 @@ def chase_map_chart(chase: ChaseMap, sides: list[str], width_in: float = 3.0, he
     location_axes(ax)
     total = len(chase.points)
     title(ax, "Chase Map", f"Catcher's view · chases: {total}")
+    legend = None
     if handles:
-        ax.legend(handles=handles, fontsize=SMALL_SIZE, loc="upper center", bbox_to_anchor=(0.5, 0.0),
-                  ncol=min(4, len(handles)), frameon=False, handletextpad=0.1, columnspacing=0.6)
+        legend = ax.legend(handles=handles, fontsize=SMALL_SIZE, loc="upper center", bbox_to_anchor=(0.5, 0.0),
+                           ncol=min(4, len(handles)), frameon=False, handletextpad=0.1, columnspacing=0.6)
     notes = []
     if not one_side:
         notes.append(" · ".join(f"{REGION_LABELS[r]} {chase.regions[r].text()} (n={chase.regions[r].n})"
@@ -167,8 +172,8 @@ def chase_map_chart(chase: ChaseMap, sides: list[str], width_in: float = 3.0, he
     if off:
         notes.append(f"{off} off the chart")
     notes.append(f"Chase % = chases ÷ pitches in the region; grey = fewer than {config.MIN_N['chase_region']}")
-    footnote(fig, " · ".join(notes))
     fig.subplots_adjust(left=0.02, right=0.98, top=0.88, bottom=0.12)
+    footnote_under(fig, legend, " · ".join(notes))
     return fig
 
 

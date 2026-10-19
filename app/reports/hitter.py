@@ -66,10 +66,17 @@ def build(df: pd.DataFrame, hitter_id: str) -> HitterReport | None:
     h = hitting.for_hitter(df, hitter_id)
     if h.empty:
         return None
+    return assemble(h, str(hitter_id), display_name(h["hitter"].iloc[-1]),
+                    scores.hitter_scores(df, hitter_id), scores.clutch_scores(df, hitter_id))
+
+
+def assemble(h: pd.DataFrame, hitter_id: str, name: str, score: scores.ScoreSummary,
+             clutch: scores.ScoreSummary) -> HitterReport:
+    """The report for the pitches in `h` (one hitter's, or a whole lineup's for the team report)."""
     points, counts = hitting.swing_decisions(h)
     return HitterReport(
-        hitter_id=str(hitter_id),
-        name=display_name(h["hitter"].iloc[-1]),
+        hitter_id=hitter_id,
+        name=name,
         sides=sorted({s for s in h["hitter_side"] if s in ("Right", "Left")}, reverse=True),
         team=h["BatterTeam"].iloc[-1],
         scope=scope_of(h),
@@ -83,6 +90,6 @@ def build(df: pd.DataFrame, hitter_id: str) -> HitterReport | None:
         decisions=points,
         decision_counts=counts,
         splits=hitting.pitcher_splits(h),
-        score=scores.hitter_scores(df, hitter_id),
-        clutch=scores.clutch_scores(df, hitter_id),
+        score=score,
+        clutch=clutch,
     )

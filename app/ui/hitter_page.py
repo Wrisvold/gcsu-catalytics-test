@@ -32,9 +32,19 @@ def render() -> None:
         st.warning("This hitter saw no pitches in the selected games.")
         return
     pdf_controls("hitter", r, df, f, len(roster))
+    show(r)
 
-    header("Individual Hitter Report", r.name, r.scope.season_text, r.scope.date_text,
-           f"Bats {r.bats_short} · {r.scope.games} game(s) · {r.scope.game_types_text}", r.grades)
+    section(5, "Scores", "1–100, from the coaches' scoring sheet")
+    score_breakdown(r.grades)
+    st.caption(SCORES_NOTE)
+
+    footer(thresholds_note())
+
+
+def show(r: report.HitterReport, title: str = "Individual Hitter Report", who: str | None = None) -> None:
+    """Header and sections 1–4, for one hitter or (team page) a whole lineup."""
+    header(title, r.name, r.scope.season_text, r.scope.date_text,
+           f"{who or 'Bats ' + r.bats_short} · {r.scope.games} game(s) · {r.scope.game_types_text}", r.grades)
 
     k = r.key
     section(1, "Key Performance Metrics", report.key_note(k))
@@ -61,9 +71,3 @@ def render() -> None:
 
     section(4, "Splits: Pitcher Hand & Velo Tier")
     show_table(stat_table(r.splits, HITTER_SPLIT_COLS, row_label=str, label_header="Split"), report.SPLITS_NOTE)
-
-    section(5, "Scores", "1–100, from the coaches' scoring sheet")
-    score_breakdown(r.grades)
-    st.caption(SCORES_NOTE)
-
-    footer(thresholds_note())

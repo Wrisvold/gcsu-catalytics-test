@@ -36,6 +36,19 @@ def title(ax, text: str, sub: str | None = None) -> None:
         ax.text(0, 1.005, sub, transform=ax.transAxes, fontsize=SMALL_SIZE, color="#555555", va="bottom")
 
 
+def footnote_under(fig: Figure, artist, text: str) -> None:
+    """Note under `artist` (a legend or text hanging below the axes), measured after layout, so the two
+    never overlap however small the chart is drawn. Call it after subplots_adjust."""
+    if not text:
+        return
+    if artist is None:
+        footnote(fig, text)
+        return
+    fig.canvas.draw()
+    box = artist.get_window_extent().transformed(fig.transFigure.inverted())
+    fig.text(0.5, box.y0 - 0.01, text, ha="center", va="top", fontsize=SMALL_SIZE, color="#555555", wrap=True)
+
+
 def footnote(fig: Figure, text: str, ax=None, y: float = -0.02) -> None:
     """Note under the chart. Anchored to `ax` when given, so it can never sit on a colorbar or ticks."""
     if not text:

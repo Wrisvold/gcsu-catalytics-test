@@ -36,6 +36,7 @@ from metrics import hitting, pitching
 from metrics.common import Stat
 from reports import hitter as hitter_report
 from reports import pitcher as pitcher_report
+from reports import team as team_report
 from reports.context import ReportFilters, Scope, fmt_date, thresholds_note
 from reports.tables import (
     BREAKDOWN_COLS, HITTER_SPLIT_COLS, PITCH_TYPE_COLS, PITCHER_SPLIT_COLS, Col, build_table,
@@ -94,9 +95,6 @@ def _header(c: Canvas, top: float, kind: str, name: str, season: str, dates: str
     c.setFillColor(PALE_GREEN)
     c.setFont(BOLD, 12.5)
     c.drawString(x + 82, y + h - 45, kind.upper())
-    c.setFillColor(PALE_TEXT)
-    c.setFont(FONT, 5.6)
-    c.drawString(x + 82, y + h - 58, config.FOOTER_VALUES)
 
     rx = x + CONTENT_W - 10
     c.setFillColor(white)
@@ -131,6 +129,11 @@ def _header(c: Canvas, top: float, kind: str, name: str, season: str, dates: str
         c.setFont(FONT, 5.2)
         c.drawString(tx, y + 9, detail)
         bx -= w + 4
+    # The values line, unless the score boxes reach under it (it's in the footer band anyway).
+    if x + 82 + pdfmetrics.stringWidth(config.FOOTER_VALUES, FONT, 5.6) < bx - 4:
+        c.setFillColor(PALE_TEXT)
+        c.setFont(FONT, 5.6)
+        c.drawString(x + 82, y + h - 58, config.FOOTER_VALUES)
     return y
 
 
@@ -287,9 +290,10 @@ def footer_note(scope: Scope, filters_note: str = "") -> str:
 
 # --- Pages --------------------------------------------------------------------------------------
 
-def _draw_pitcher(c: Canvas, r: pitcher_report.PitcherReport, filters_note: str) -> float:
+def _draw_pitcher(c: Canvas, r: pitcher_report.PitcherReport, filters_note: str,
+                  title: str = "Individual Pitcher Report") -> float:
     bottom = _footer(c, footer_note(r.scope, filters_note))
-    y = _header(c, PAGE_H - MARGIN, "Individual Pitcher Report", r.name, r.scope.season_text, r.scope.date_text,
+    y = _header(c, PAGE_H - MARGIN, title, r.name, r.scope.season_text, r.scope.date_text,
                 f"{r.throws_short} · {r.scope.games} game(s) · {r.scope.game_types_text}", r.grades) - GAP
     L = r.line
     y = _section(c, y, 1, "Game Summary", f"{L['pitches']} pitches") - 2
@@ -335,10 +339,12 @@ def _draw_pitcher(c: Canvas, r: pitcher_report.PitcherReport, filters_note: str)
     return _draw(c, y, splits_note) - bottom
 
 
-def _draw_hitter(c: Canvas, r: hitter_report.HitterReport, filters_note: str) -> float:
+def _draw_hitter(c: Canvas, r: hitter_report.HitterReport, filters_note: str,
+                 title: str = "Individual Hitter Report", who: str | None = None) -> float:
     bottom = _footer(c, footer_note(r.scope, filters_note))
-    y = _header(c, PAGE_H - MARGIN, "Individual Hitter Report", r.name, r.scope.season_text, r.scope.date_text,
-                f"Bats {r.bats_short} · {r.scope.games} game(s) · {r.scope.game_types_text}", r.grades) - GAP
+    who = who or f"Bats {r.bats_short}"
+    y = _header(c, PAGE_H - MARGIN, title, r.name, r.scope.season_text, r.scope.date_text,
+                f"{who} · {r.scope.games} game(s) · {r.scope.game_types_text}", r.grades) - GAP
     k = r.key
     y = _section(c, y, 1, "Key Performance Metrics", hitter_report.key_note(k)) - 2
     y = _tiles(c, y, [("PA", k["PA"]), ("AVG", k["AVG"]), ("OBP", k["OBP"]), ("SLG", k["SLG"]), ("OPS", k["OPS"]),
@@ -373,6 +379,91 @@ def _draw_hitter(c: Canvas, r: hitter_report.HitterReport, filters_note: str) ->
     y = _section(c, y, 4, "Splits: Pitcher Hand & Velo Tier") - 2
     y = _draw(c, y, splits) - 1.5
     return _draw(c, y, splits_note) - bottom
+
+
+# --- Team reports -------------------------------------------------------------------------------
+
+ROSTER_CELL = ParagraphStyle("roster", parent=CELL, fontSize=6.6, leading=7.6)
+ROSTER_NOTE = ("Each row is that player's numbers for the same games and filters. A player's score is his "
+               "average over his games; the team score in the header is the average of every player's game "
+               "scores. Grey = below the minimum sample.")
+
+
+def _roster_table(roster: pd.DataFrame, label_w: float = 92) -> Table:
+    shown = team_report.roster_text(roster)
+    cols = list(shown.columns)
+    data = [[Paragraph(h, HEAD) for h in cols]]
+    low = team_report.roster_low(roster)
+    data += [[Paragraph(v if j == 0 or not low.iat[i, j] else f'<font color="{config.LOW_SAMPLE_TEXT}">{v}</font>',
+                        LABEL if j == 0 else ROSTER_CELL) for j, v in enumerate(row)]
+             for i, row in enumerate(shown.itertuples(index=False))]
+    style = [("BACKGROUND", (0, 0), (-1, 0), NAVY), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+             ("TOPPADDING", (0, 0), (-1, -1), 1.8), ("BOTTOMPADDING", (0, 0), (-1, -1), 1.8),
+             ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+             ("LINEBELOW", (0, 1), (-1, -1), 0.4, RULE)]
+    style += [("BACKGROUND", (0, r), (-1, r), ZEBRA) for r in range(2, len(data), 2)]
+    # Rates and scores get more room than small counts, so "100.0%" stays on one line.
+    weight = [0.6 if h in ("T", "B", "G") else 1.45 if "%" in h else 1.0 for h in cols[1:]]
+    unit = (CONTENT_W - label_w) / sum(weight)
+    t = Table(data, colWidths=[label_w] + [w * unit for w in weight], repeatRows=1)
+    t.setStyle(TableStyle(style))
+    return t
+
+
+def _draw_roster(c: Canvas, r, filters_note: str, title: str, extra: str, num: int, heading: str,
+                 roster: pd.DataFrame, note: str) -> None:
+    """The by-player table on as many pages as it needs, each with the report's header and footer."""
+    rest = [_roster_table(roster)]
+    while rest:
+        bottom = _footer(c, footer_note(r.scope, filters_note))
+        y = _header(c, PAGE_H - MARGIN, title, r.name, r.scope.season_text, r.scope.date_text, extra,
+                    r.grades) - GAP
+        y = _section(c, y, num, heading, f"{len(roster)} players") - 2
+        para = Paragraph(note, NOTE)
+        room = y - bottom - _height(para) - 4
+        table = rest.pop()
+        pieces = table.split(CONTENT_W, room) if _height(table) > room else [table]
+        y = _draw(c, y, pieces[0]) - 2
+        if len(pieces) > 1:
+            rest.append(pieces[1])
+            c.showPage()
+        else:
+            _draw(c, y, para)
+
+
+def _draw_team_pitchers(c: Canvas, t: team_report.TeamPitcherReport, filters_note: str) -> float:
+    r, title = t.report, "Team Pitcher Report"
+    slack = _draw_pitcher(c, r, filters_note, title)
+    c.showPage()
+    _draw_roster(c, r, filters_note, title, f"{r.throws_short} · {r.scope.games} game(s) · {r.scope.game_types_text}",
+                 6, "By Pitcher", t.roster, ROSTER_NOTE + " Best Pitcher Score first.")
+    return slack
+
+
+def _draw_team_hitters(c: Canvas, t: team_report.TeamHitterReport, filters_note: str) -> float:
+    r, title = t.report, "Team Hitter Report"
+    who = f"{t.n_players} hitter{'s' if t.n_players != 1 else ''}"
+    slack = _draw_hitter(c, r, filters_note, title, who)
+    c.showPage()
+    _draw_roster(c, r, filters_note, title, f"{who} · {r.scope.games} game(s) · {r.scope.game_types_text}",
+                 5, "By Hitter", t.roster, ROSTER_NOTE + " Best Hitter Score first.")
+    return slack
+
+
+def team_pdf_bytes(kind: str, t, filters_note: str = "") -> bytes:
+    """The team report: the individual layout run on the whole team, then the by-player table."""
+    buf = io.BytesIO()
+    draw = _draw_team_pitchers if kind == "pitcher" else _draw_team_hitters
+    _render([(draw, t)], f"{t.report.name}, team report", buf, filters_note)
+    return buf.getvalue()
+
+
+def team_pdf_filename(kind: str, t) -> str:
+    """e.g. team_pitchers_GCSU_2026-10-23.pdf."""
+    s = t.report.scope
+    dates = s.first_date if s.first_date == s.last_date else f"{s.first_date}_to_{s.last_date}"
+    who = re.sub(r"[^A-Za-z0-9]+", "_", team_report.team_label(t.team)).strip("_")
+    return f"team_{'pitchers' if kind == 'pitcher' else 'hitters'}_{who}_{dates}.pdf"
 
 
 def _render(pages: list, title: str, out, filters_note: str) -> list[float]:
