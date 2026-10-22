@@ -10,7 +10,7 @@ import db
 from charts.pitching import movement_chart
 from metrics import pitching
 from reports.context import ReportFilters, display_name, fmt_date
-from ui.common import frame, get_conn, header
+from ui.common import audit, frame, get_conn, header
 
 CODES = list(config.PITCH_TYPES)
 
@@ -90,6 +90,7 @@ def render() -> None:
                 st.error("The minimum speed is above the maximum speed.")
             else:
                 db.add_rule(conn, pid, name, auto, corrected, min_v, max_v, note.strip() or None)
+                audit("add_pitch_type_rule", f"pitcher={pid} {auto}->{corrected}")
                 st.rerun()
 
     rules = db.get_rules(conn)
@@ -102,6 +103,7 @@ def render() -> None:
         c1.markdown(_rule_text(r))
         if c2.button("Delete", key=f"del-rule-{r['id']}"):
             db.delete_rule(conn, r["id"])
+            audit("delete_pitch_type_rule", f"rule={r['id']}")
             st.rerun()
 
     with st.expander("Correct individual pitches"):
@@ -128,8 +130,10 @@ def render() -> None:
                 if new != old:
                     if new:
                         db.set_override(conn, uid, new)
+                        audit("set_pitch_override", f"pitch={uid} type={new}")
                     else:
                         db.delete_override(conn, uid)
+                        audit("delete_pitch_override", f"pitch={uid}")
             st.rerun()
 
     _all_rules(rules)
@@ -155,6 +159,8 @@ def _single_pitch_picker(conn, table: pd.DataFrame, overrides: dict[str, str], p
     if st.button("Save single-pitch change", key=f"ov-save-{pid}"):
         if new:
             db.set_override(conn, uid, new)
+            audit("set_pitch_override", f"pitch={uid} type={new}")
         elif current:
             db.delete_override(conn, uid)
+            audit("delete_pitch_override", f"pitch={uid}")
         st.rerun()

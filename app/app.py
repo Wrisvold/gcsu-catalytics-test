@@ -1,12 +1,17 @@
 """GCSU Catalytics Streamlit app. Run with `streamlit run app.py`."""
+import logging
+
 import streamlit as st
 
 import config
 from ui import corrections_page, games_page, hitter_page, pitcher_page, team_page
-from ui.common import inject_css
+from ui.common import inject_css, require_user
 
+if config.SERVER_MODE:  # audit lines (ui.common.audit) go to stdout, which the container platform collects
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s", force=True)
 st.set_page_config(page_title=config.APP_TITLE, page_icon="⚾", layout="wide")
 inject_css()
+require_user()
 st.sidebar.markdown(f"## {config.APP_TITLE}")
 if config.DEMO_MODE:
     st.info("**Test version.** This runs entirely in your browser: your TrackMan file is never uploaded, "

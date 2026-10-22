@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS loads (
     rows_in_file      INTEGER,
     added             INTEGER,
     skipped_duplicate INTEGER,
-    skipped_no_uid    INTEGER
+    skipped_no_uid    INTEGER,
+    loaded_by         TEXT               -- signed-in user (server mode), else NULL
 );
 """
 
@@ -94,7 +95,10 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     path = config.DB_PATH if path is None else path
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), check_same_thread=False)
+    # One connection per browser session (ui.common.get_conn). Two people saving at once: the second
+    # waits up to 15 s for the first instead of failing. The default rollback journal is kept because
+    # SQLite's WAL mode doesn't work on a network file system such as AWS EFS.
+    conn = sqlite3.connect(str(path), check_same_thread=False, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     _migrate(conn)
@@ -106,6 +110,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     have = {r["name"] for r in conn.execute("PRAGMA table_info(games)")}
     if "innings" not in have:
         conn.execute("ALTER TABLE games ADD COLUMN innings INTEGER")
+        conn.commit()
+    if "loaded_by" not in {r["name"] for r in conn.execute("PRAGMA table_info(loads)")}:
+        conn.execute("ALTER TABLE loads ADD COLUMN loaded_by TEXT")
         conn.commit()
 
 
@@ -262,17 +269,18 @@ def get_play_by_play(conn: sqlite3.Connection, game_ids: list[str] | None = None
 # --- Load log -----------------------------------------------------------------------------------
 
 def log_load(conn: sqlite3.Connection, source_file: str, rows_in_file: int, added: int,
-             skipped_duplicate: int, skipped_no_uid: int) -> None:
+             skipped_duplicate: int, skipped_no_uid: int, loaded_by: str | None = None) -> None:
     conn.execute("INSERT INTO loads (source_file, loaded_at, rows_in_file, added, skipped_duplicate, "
-                 "skipped_no_uid) VALUES (?, ?, ?, ?, ?, ?)",
-                 (source_file, _now(), rows_in_file, added, skipped_duplicate, skipped_no_uid))
+                 "skipped_no_uid, loaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (source_file, _now(), rows_in_file, added, skipped_duplicate, skipped_no_uid, loaded_by))
     conn.commit()
 
 
 def get_loads(conn: sqlite3.Connection) -> pd.DataFrame:
     rows = conn.execute("SELECT * FROM loads ORDER BY id DESC").fetchall()
     return pd.DataFrame([dict(r) for r in rows], columns=["id", "source_file", "loaded_at", "rows_in_file",
-                                                          "added", "skipped_duplicate", "skipped_no_uid"])
+                                                          "added", "skipped_duplicate", "skipped_no_uid",
+                                                          "loaded_by"])
 
 
 def game_pitch_counts(conn: sqlite3.Connection) -> dict[str, int]:

@@ -15,7 +15,8 @@ DATA_SOURCE_NOTE = "Data: TrackMan."
 
 # --- Paths --------------------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data"
+# GCSU_CATALYTICS_DATA_DIR moves the database folder (the server's persistent volume, DEPLOY.md).
+DATA_DIR = Path(os.environ.get("GCSU_CATALYTICS_DATA_DIR", ROOT / "data"))
 # GCSU_CATALYTICS_DB points the app at another database file (used for testing).
 DB_PATH = Path(os.environ.get("GCSU_CATALYTICS_DB", DATA_DIR / "catalytics.db"))
 EXPORT_DIR = ROOT / "exports"
@@ -24,6 +25,22 @@ EXPORT_DIR = ROOT / "exports"
 # weather lookup. On when a DEMO_MODE file sits next to this one or GCSU_CATALYTICS_DEMO=1.
 DEMO_MODE = os.environ.get("GCSU_CATALYTICS_DEMO") == "1" or (ROOT / "DEMO_MODE").exists()
 LOGO_PATH = ROOT / "assets" / "logo.png"
+
+# --- Server mode (GCSU's AWS; DEPLOY.md) ----------------------------------------------------------
+# On with GCSU_CATALYTICS_SERVER=1. PDFs come as downloads (nothing is written to the server's disk but
+# the database), and every page needs a signed-in user, passed in by the single-sign-on proxy in front of
+# the app (the AWS load balancer's OIDC sign-in). The app has no passwords of its own.
+SERVER_MODE = os.environ.get("GCSU_CATALYTICS_SERVER") == "1"
+# Request header that carries the signed-in user. The AWS load balancer sends the user's claims as a JWT
+# in x-amzn-oidc-data (the email is read from it); another proxy can name a plain header instead.
+USER_HEADER = os.environ.get("GCSU_CATALYTICS_USER_HEADER", "x-amzn-oidc-data").lower()
+# Refuse every page when no user header arrives. On by default in server mode; set to 0 only to test the
+# container without the sign-in proxy.
+REQUIRE_USER = SERVER_MODE and os.environ.get("GCSU_CATALYTICS_REQUIRE_USER", "1") != "0"
+# Optional: only these signed-in users may use the app (comma-separated emails). Empty = anyone the
+# sign-in proxy lets through (restrict it with an identity-provider group instead, DEPLOY.md).
+ALLOWED_USERS = {u.strip().lower() for u in os.environ.get("GCSU_CATALYTICS_ALLOWED_USERS", "").split(",")
+                 if u.strip()}
 
 # --- Branding -----------------------------------------------------------------------------------
 NAVY = "#0B2545"  # TODO: confirm official values with GCSU Athletics

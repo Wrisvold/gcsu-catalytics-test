@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import json
+import logging
 from datetime import date
 from html import escape
 
@@ -83,9 +85,66 @@ def inject_css() -> None:
 
 # --- Data ---------------------------------------------------------------------------------------
 
-@st.cache_resource
 def get_conn():
-    return db.connect()
+    """This browser session's database connection (one each, so two people's saves can't interleave)."""
+    if "_conn" not in st.session_state:
+        st.session_state["_conn"] = db.connect()
+    return st.session_state["_conn"]
+
+
+# --- Signed-in user (server mode) ----------------------------------------------------------------
+
+log = logging.getLogger("gcsu_catalytics")
+
+
+def _claims(token: str) -> dict:
+    """The claims in a JWT's payload. Not verified here: the container only takes traffic from the load
+    balancer that signed it (DEPLOY.md, network rules)."""
+    try:
+        payload = token.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError):
+        return {}
+
+
+def current_user() -> str | None:
+    """Who is signed in, from the sign-in proxy's header (config.USER_HEADER); None when there is none."""
+    try:
+        value = st.context.headers.get(config.USER_HEADER)
+    except Exception:  # no request context (tests, bare mode)
+        value = None
+    return user_from_header(value)
+
+
+def user_from_header(value: str | None) -> str | None:
+    """A JWT (the AWS load balancer's x-amzn-oidc-data) gives its email or other name claim; any other
+    value is taken as the user name itself."""
+    if not value or not value.strip():
+        return None
+    if value.count(".") == 2:
+        c = _claims(value)
+        return next((str(c[k]) for k in ("email", "preferred_username", "upn", "name", "sub") if c.get(k)), None)
+    return value.strip()
+
+
+def require_user() -> None:
+    """Server mode: stop every page unless the sign-in proxy says who this is (and, when
+    config.ALLOWED_USERS is set, that they're on it). Shows who is signed in."""
+    user = current_user()
+    if config.REQUIRE_USER and not user:
+        st.error("Sign-in required. Open the app through its GCSU address so single sign-on can identify you.")
+        st.stop()
+    if config.ALLOWED_USERS and (user or "").lower() not in config.ALLOWED_USERS:
+        log.warning("refused user=%s", user)
+        st.error(f"{user} isn't on this app's list of users. Ask the app's owner to add you.")
+        st.stop()
+    if user:
+        st.sidebar.caption(f"Signed in as {user}")
+
+
+def audit(action: str, detail: str = "") -> None:
+    """One line per change to the data, with who made it, to the server log (stdout, e.g. CloudWatch)."""
+    log.info("user=%s action=%s %s", current_user() or "-", action, detail)
 
 
 @st.cache_data(show_spinner="Crunching numbers…", max_entries=16)
@@ -253,6 +312,11 @@ def report_filters(conn) -> ReportFilters | None:
 
 # --- PDF export ---------------------------------------------------------------------------------
 
+def _count(n: int, kind: str) -> str:
+    """ "all 12 pitchers", or "1 pitcher" for a lone player."""
+    return f"1 {kind}" if n == 1 else f"all {n} {kind}s"
+
+
 def pdf_controls(kind: str, report, df: pd.DataFrame, f: ReportFilters, roster_size: int) -> None:
     """Sidebar buttons: download this player's PDF, one print-ready PDF of the whole team, or one
     PDF per player saved to exports/."""
@@ -271,11 +335,16 @@ def pdf_controls(kind: str, report, df: pd.DataFrame, f: ReportFilters, roster_s
                        file_name=export_filename(kind, report.name, report.scope), mime="application/pdf",
                        icon=":material/picture_as_pdf:", type="primary", on_click="ignore")
     if team_n:
-        sb.download_button(f"Print file: all {team_n} {plural} (one PDF)",
+        sb.download_button(f"Print file: {_count(team_n, kind)} (one PDF)",
                            data=lambda: batch_pdf(df, kind, note, gcsu_only),
                            file_name=batch_pdf_filename(kind, df), mime="application/pdf",
                            icon=":material/print:", on_click="ignore", help=PRINT_HELP)
-    if sb.button(f"Save all {roster_size} {plural} to exports/", help="One PDF per player for the current "
+    if config.SERVER_MODE:  # nothing is written to the server's disk: the whole team comes as one zip
+        sb.download_button(f"Download {_count(roster_size, kind)} (.zip)", data=lambda: batch_zip(df, kind, note),
+                           file_name=f"gcsu_catalytics_{plural}.zip", mime="application/zip", on_click="ignore",
+                           help="One PDF per player for the current filters, in one zip file.")
+        return
+    if sb.button(f"Save {_count(roster_size, kind)} to exports/", help="One PDF per player for the current "
                  "filters, saved in the exports folder. Re-exporting the same report overwrites it."):
         with st.spinner(f"Writing {roster_size} PDFs…"):
             paths = batch_export(df, kind, filters_note=note)
@@ -305,18 +374,18 @@ def _demo_pdf_controls(kind: str, report, df: pd.DataFrame, f: ReportFilters, no
             made[one_key] = pdf_bytes(kind, report, note)
         st.rerun()
     if team_n and print_key in made:
-        sb.download_button(f"Save print file: all {team_n} {plural} (PDF)", data=made[print_key],
+        sb.download_button(f"Save print file: {_count(team_n, kind)} (PDF)", data=made[print_key],
                            file_name=batch_pdf_filename(kind, df), mime="application/pdf",
                            icon=":material/print:", on_click="ignore", help=PRINT_HELP)
-    elif team_n and sb.button(f"Make print file: all {team_n} {plural}", icon=":material/print:",
+    elif team_n and sb.button(f"Make print file: {_count(team_n, kind)}", icon=":material/print:",
                               help=PRINT_HELP + " Takes about a second per player."):
         with st.spinner(f"Making {team_n} pages…"):
             made[print_key] = batch_pdf(df, kind, note, gcsu_only)
         st.rerun()
     if all_key in made:
-        sb.download_button(f"Save all {roster_size} {plural} (.zip)", data=made[all_key],
+        sb.download_button(f"Save {_count(roster_size, kind)} (.zip)", data=made[all_key],
                            file_name=f"gcsu_catalytics_{plural}.zip", mime="application/zip", on_click="ignore")
-    elif sb.button(f"Make PDFs for all {roster_size} {plural}", help="One PDF per player for the current "
+    elif sb.button(f"Make PDFs for {_count(roster_size, kind)}", help="One PDF per player for the current "
                    "filters, in one zip file. Takes about a second per player."):
         with st.spinner(f"Making {roster_size} PDFs…"):
             made[all_key] = batch_zip(df, kind, note)

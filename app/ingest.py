@@ -84,7 +84,8 @@ def game_defaults(game: pd.DataFrame) -> dict:
     return out
 
 
-def load_csv(conn: sqlite3.Connection, source: str | Path | IO, source_name: str | None = None) -> IngestResult:
+def load_csv(conn: sqlite3.Connection, source: str | Path | IO, source_name: str | None = None,
+             loaded_by: str | None = None) -> IngestResult:
     """Validate a TrackMan CSV and add its new pitches. Raises IngestError if columns are missing."""
     name = source_name or (Path(source).name if isinstance(source, (str, Path)) else "upload.csv")
     df = read_trackman_csv(source)
@@ -109,7 +110,7 @@ def load_csv(conn: sqlite3.Connection, source: str | Path | IO, source_name: str
                  if db.insert_game_if_new(conn, gid, game_defaults(df[df["GameID"] == gid]))]
 
     result = IngestResult(name, len(has_uid), added, skipped + in_file_dupes, no_uid, game_ids, new_games)
-    db.log_load(conn, name, result.rows_in_file, added, result.skipped_duplicate, no_uid)
+    db.log_load(conn, name, result.rows_in_file, added, result.skipped_duplicate, no_uid, loaded_by)
     return result
 
 

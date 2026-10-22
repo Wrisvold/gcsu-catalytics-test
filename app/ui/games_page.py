@@ -13,7 +13,7 @@ from pbp.match import GameMatch, match_game
 from pbp.sheet import HELP as SHEET_HELP
 from pbp.sheet import SheetError, is_coach, read_sheet, sheet_from_box, sheet_from_trackman, to_csv_bytes, trackman_teams
 from reports.context import fmt_date
-from ui.common import game_label, get_conn, header
+from ui.common import audit, current_user, game_label, get_conn, header
 
 NOT_SET = "(not set)"
 
@@ -100,6 +100,7 @@ def game_form(conn, g: pd.Series, key: str) -> None:
                     weather[k] != (_num(g[k]) if k != "wind_dir" else g[k]) for k in weather):
                 fields["weather_source"] = f"{source}, edited"
             db.update_game(conn, g["game_id"], fields)
+            audit("save_game_details", f"game={g['game_id']}")
             st.toast("Game details saved.", icon=":material/check:")  # a toast survives the rerun
             st.rerun()
 
@@ -137,6 +138,7 @@ def _save_pbp(conn, gid: str, page: str, source: str) -> None:
         st.session_state[f"pbp-msg-{gid}"] = ("error", problem)
         return
     db.set_play_by_play(conn, gid, box.to_json(), source)
+    audit("load_box_score", f"game={gid} source={source}")
     st.session_state[f"pbp-msg-{gid}"] = ("success", f"Play-by-play saved: {box.away} {box.away_runs} at "
                                                      f"{box.home} {box.home_runs}.")
 
@@ -159,6 +161,7 @@ def _save_sheet(conn, gid: str, data: bytes, name: str) -> None:
         st.session_state[f"pbp-msg-{gid}"] = ("error", problem)
         return
     db.set_play_by_play(conn, gid, box.to_json(), box.source)
+    audit("load_coach_sheet", f"game={gid}")
     text = f"Coach play-by-play saved: {box.away} {box.away_runs} at {box.home} {box.home_runs}."
     if old and old.away_runs is not None and (old.away_runs, old.home_runs) != (box.away_runs, box.home_runs):
         text += (f" The play-by-play it replaced had a final score of {old.away_runs}-{old.home_runs}; "
@@ -233,6 +236,7 @@ def pbp_panel(conn, g: pd.Series, key: str) -> None:
                     st.markdown("\n".join(f"- {i}" for i in items))
         if st.button("Remove play-by-play", key=f"{key}-pbp-del"):
             db.delete_play_by_play(conn, gid)
+            audit("remove_play_by_play", f"game={gid}")
             st.rerun()
     c1, c2 = st.columns(2)
     if not config.DEMO_MODE:
@@ -279,8 +283,9 @@ def load_page() -> None:
     header("Load TrackMan Data")
     n = db.count_pitches(conn)
     games = db.get_games(conn)
-    st.markdown(f"The database holds **{n} pitches** from **{len(games)} game(s)**. "
-                "Everything stays on this computer.")
+    where = ("on GCSU's server, open only to signed-in staff" if config.SERVER_MODE
+             else "in your browser" if config.DEMO_MODE else "on this computer")
+    st.markdown(f"The database holds **{n} pitches** from **{len(games)} game(s)**. Everything stays {where}.")
 
     files = st.file_uploader("TrackMan CSV export(s)", type=["csv"], accept_multiple_files=True,
                              help="Load the file straight from TrackMan. Loading a file twice adds nothing: "
@@ -289,7 +294,8 @@ def load_page() -> None:
         loaded, errors = [], []
         for up in files:
             try:
-                res = ingest.load_csv(conn, up, up.name)
+                res = ingest.load_csv(conn, up, up.name, loaded_by=current_user())
+                audit("load_trackman", f"file={up.name} added={res.added}")
             except ingest.IngestError as e:
                 errors.append(str(e))
                 continue
@@ -323,7 +329,8 @@ def load_page() -> None:
     with st.expander("Load history"):
         st.dataframe(db.get_loads(conn).rename(columns={
             "source_file": "File", "loaded_at": "Loaded", "rows_in_file": "Rows", "added": "Added",
-            "skipped_duplicate": "Skipped (duplicate)", "skipped_no_uid": "Skipped (no PitchUID)"}),
+            "skipped_duplicate": "Skipped (duplicate)", "skipped_no_uid": "Skipped (no PitchUID)",
+            "loaded_by": "Loaded by"}),
             hide_index=True)
 
 
