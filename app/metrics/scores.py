@@ -158,6 +158,8 @@ def pitcher_game_score(game: pd.DataFrame, pitcher_id: str) -> GameScore | None:
     notes = []
     if p["off_line"].all():
         runs = int(p["off_R"].sum())
+        if "off_er" in p and not p["off_er"].all():
+            notes.append("Runs Allowed charged from the coach play-by-play sheet")
     else:
         runs = int(p["RunsScored"].fillna(0).sum())
         notes.append("Runs Allowed from TrackMan (no official line for this game)")

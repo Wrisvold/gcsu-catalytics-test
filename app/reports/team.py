@@ -3,13 +3,13 @@
 A team report is the individual report run on every pitch one team threw (or saw), so its sections,
 tables and charts are the same ones, drawn by the same code. Two things differ:
 
-- **Scores** are the average of every player's game scores (each pitcher's outing, or each hitter's
-  game, counts once), because the scoring sheet scores one player in one game.
+- **Scores** are the average of every player's game scores, weighted by plate appearances (batters
+  faced for a pitcher), because the scoring sheet scores one player in one game (coach answer R1).
 - A **by-player table** lists each player's main numbers and scores, best score first.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pandas as pd
 
@@ -21,15 +21,24 @@ from reports import pitcher as pitcher_report
 from reports.context import display_name
 
 
+@dataclass
 class TeamScore(scores.ScoreSummary):
-    """Average of every player-game score in the report."""
+    """Every player-game score in the report, averaged with each weighted by its plate appearances."""
+    weights: list[int] = field(default_factory=list)   # PA (batters faced) in each of `games`
+
+    @property
+    def average(self) -> float | None:
+        total = sum(self.weights)
+        if not self.games or not total:
+            return super().average
+        return sum(g.total * w for g, w in zip(self.games, self.weights)) / total
 
     @property
     def detail(self) -> str:
         n = len(self.games)
         if not n:
             return self.unavailable or "no games"
-        return f"avg of {n} player-game{'s' if n != 1 else ''}"
+        return f"PA-weighted avg of {n} player-game{'s' if n != 1 else ''}"
 
 
 def team_label(code: str) -> str:
@@ -43,10 +52,17 @@ def teams(df: pd.DataFrame, kind: str) -> list[str]:
     return sorted(found, key=lambda t: t != config.TEAM_CODE)
 
 
-def _team_score(name: str, summaries: list[scores.ScoreSummary]) -> TeamScore:
-    games = [g for s in summaries for g in s.games]
-    reason = next((s.unavailable for s in summaries if s.unavailable), "")
-    return TeamScore(name, games, "" if games else reason)
+def _team_score(name: str, summaries: dict[str, scores.ScoreSummary], df: pd.DataFrame, id_col: str) -> TeamScore:
+    """`summaries` maps player id -> his score; each of his games is weighted by his PA in it."""
+    ends = df[df["pa_end"]]
+    pa = ends.groupby([ends[id_col].astype(str), ends["GameID"].astype(str)]).size()
+    games, weights = [], []
+    for pid, s in summaries.items():
+        for g in s.games:
+            games.append(g)
+            weights.append(int(pa.get((pid, str(g.game_id)), 0)))
+    reason = next((s.unavailable for s in summaries.values() if s.unavailable), "")
+    return TeamScore(name, games, "" if games else reason, weights)
 
 
 @dataclass
@@ -79,11 +95,10 @@ def build_pitchers(df: pd.DataFrame, team: str = config.TEAM_CODE) -> TeamPitche
     if t.empty:
         return None
     ids = [str(i) for i in pitching.list_pitchers(t)["PitcherId"]]
-    rows, summaries = [], []
+    rows, summaries = [], {}
     for pid in ids:
         p = pitching.for_pitcher(t, pid)
-        score = scores.pitcher_scores(df, pid)
-        summaries.append(score)
+        score = summaries[pid] = scores.pitcher_scores(df, pid)
         L = pitching.performance_line(p)
         throws = p["PitcherThrows"].iloc[-1]
         rows.append({"Player": display_name(p["Pitcher"].iloc[-1]),
@@ -93,7 +108,7 @@ def build_pitchers(df: pd.DataFrame, team: str = config.TEAM_CODE) -> TeamPitche
                      "1st-Pitch Strike %": L["First-Pitch Strike %"], "Pitcher Score": score})
     staff = pitcher_report.assemble(t, team, f"{team_label(team)} Pitching Staff",
                                     f"{len(ids)} pitcher{'s' if len(ids) != 1 else ''}",
-                                    _team_score("Pitcher Score", summaries))
+                                    _team_score("Pitcher Score", summaries, df, "PitcherId"))
     return TeamPitcherReport(team, staff, _sort(rows, "Pitcher Score"), len(ids))
 
 
@@ -102,12 +117,11 @@ def build_hitters(df: pd.DataFrame, team: str = config.TEAM_CODE) -> TeamHitterR
     if t.empty:
         return None
     ids = [str(i) for i in hitting.list_hitters(t)["hitter_id"]]
-    rows, hit_scores, clutch_scores = [], [], []
+    rows, hit_scores, clutch_scores = [], {}, {}
     for hid in ids:
         h = hitting.for_hitter(t, hid)
-        score, clutch = scores.hitter_scores(df, hid), scores.clutch_scores(df, hid)
-        hit_scores.append(score)
-        clutch_scores.append(clutch)
+        score = hit_scores[hid] = scores.hitter_scores(df, hid)
+        clutch = clutch_scores[hid] = scores.clutch_scores(df, hid)
         k = hitting.key_metrics(h)
         sides = {s for s in h["hitter_side"] if s in ("Right", "Left")}
         rows.append({"Player": display_name(h["hitter"].iloc[-1]),
@@ -117,8 +131,8 @@ def build_hitters(df: pd.DataFrame, team: str = config.TEAM_CODE) -> TeamHitterR
                      "AVG": k["AVG"], "OBP": k["OBP"], "SLG": k["SLG"], "OPS": k["OPS"], "QAB %": k["QAB %"],
                      "Hard Hit %": k["Hard Hit %"], "Hitter Score": score, "Clutch Score": clutch})
     lineup = hitter_report.assemble(t, team, f"{team_label(team)} Hitters",
-                                    _team_score("Hitter Score", hit_scores),
-                                    _team_score("Clutch Score", clutch_scores))
+                                    _team_score("Hitter Score", hit_scores, df, "hitter_id"),
+                                    _team_score("Clutch Score", clutch_scores, df, "hitter_id"))
     return TeamHitterReport(team, lineup, _sort(rows, "Hitter Score"), len(ids))
 
 

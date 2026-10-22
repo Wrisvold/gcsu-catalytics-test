@@ -306,6 +306,33 @@ def replay_half(h: HalfInning, start: tuple[int, int], final_half: bool, rows: l
     return pas, warnings, (score[0], score[1])
 
 
+def run_sources(rep: Replay) -> list[int | None]:
+    """For every run in the game, in order, the plate appearance (index in `rep.pas`) that put that
+    runner on base, or None when the replay can't tell (a runner it never saw reach). Pinch runners
+    take over the runner they replace, since substitutions don't move anyone."""
+    sources: list[int | None] = []
+    bases: dict[int, int | None] = {1: None, 2: None, 3: None}
+    half, n = None, -1
+    for row in rep.rows:
+        if (row.inning, row.half) != half:
+            half, bases = (row.inning, row.half), {1: None, 2: None, 3: None}
+        if row.batter:
+            n += 1
+        new = {b: (None if b in row.moves else who) for b, who in bases.items()}
+        for k, to in row.moves.items():
+            if to == HOME:
+                sources.append(bases[k])
+            elif to in (1, 2, 3):
+                new[to] = bases[k]
+        if row.batter:
+            if row.batter_to == HOME:
+                sources.append(n)
+            elif row.batter_to in (1, 2, 3):
+                new[row.batter_to] = n
+        bases = new
+    return sources
+
+
 def replay(box: BoxScore) -> Replay:
     """Every plate appearance in the game, in order, with the state before it."""
     out = Replay()

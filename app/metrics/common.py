@@ -343,8 +343,11 @@ def add_game_state(df: pd.DataFrame, boxes: dict | None) -> None:
     PA-ending pitch only.
 
     Also `off_R` / `off_ER` (official runs and earned runs, on each pitcher's first pitch of a game),
-    `off_line` (True on every pitch of a pitcher whose official line was found for that game) and
-    `gs_coach` (True on every pitch of a game whose play-by-play is a coach sheet, `pbp.sheet`).
+    `off_line` (True on every pitch of a pitcher whose R is known for that game), `off_er` (True where
+    his ER is known too) and `gs_coach` (True on every pitch of a game whose play-by-play is a coach
+    sheet, `pbp.sheet`). R is known from his official line, or, in a coach-sheet game, for a pitcher with
+    no official line, from the sheet: each run is charged to the pitcher who let that runner on (C1).
+    That needs every run's runner matched to a TrackMan plate appearance; ER stays unknown.
     """
     from pbp.match import match_game  # local: metrics stays importable without the pbp package loaded
     from pbp.sheet import is_coach
@@ -354,6 +357,7 @@ def add_game_state(df: pd.DataFrame, boxes: dict | None) -> None:
     df["off_R"] = 0
     df["off_ER"] = 0
     df["off_line"] = False
+    df["off_er"] = False
     df["gs_coach"] = False
     for gid, box in (boxes or {}).items():
         in_game = df["GameID"] == gid
@@ -373,11 +377,17 @@ def add_game_state(df: pd.DataFrame, boxes: dict | None) -> None:
                 df.loc[ends, col] = df.loc[ends, "pa_id"].map(st[col]).to_numpy()
         for pid, line in m.pitcher_lines.items():
             mine = in_game & (df["PitcherId"].astype(str) == pid)
-            df.loc[mine, "off_line"] = True
+            df.loc[mine, ["off_line", "off_er"]] = True
             first = mine.idxmax()
             df.loc[first, "off_R"] = line.r
             df.loc[first, "off_ER"] = line.er
-    for col in ("gs_known", "gs_on1", "gs_on2", "gs_on3", "gs_dp", "gs_advanced", "off_line", "gs_coach"):
+        if is_coach(box.source) and not m.uncharged_runs:
+            for pid in set(df.loc[in_game, "PitcherId"].astype(str)) - set(m.pitcher_lines):
+                mine = in_game & (df["PitcherId"].astype(str) == pid)
+                df.loc[mine, "off_line"] = True
+                df.loc[mine.idxmax(), "off_R"] = m.charged_runs.get(pid, 0)
+    for col in ("gs_known", "gs_on1", "gs_on2", "gs_on3", "gs_dp", "gs_advanced", "off_line", "off_er",
+                "gs_coach"):
         df[col] = df[col].astype(bool)
     df["gs_rbi"] = df["gs_rbi"].fillna(0).astype(int)
     df["gs_code"] = df["gs_code"].astype(object).where(df["gs_code"].notna(), None)

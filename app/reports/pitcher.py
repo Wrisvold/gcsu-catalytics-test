@@ -42,6 +42,9 @@ def er_text(line: dict) -> str:
 def runs_footnote(line: dict) -> str:
     """Where R and ER came from (shared by the app and the PDF)."""
     official = line["runs_official"]
+    if official == "all" and line.get("runs_from_sheet"):
+        return ("* R is charged to the pitcher who put each runner on, from the box score or the coaches' "
+                "play-by-play sheet; ER needs the official box score for every game.")
     if official == "all":
         return "R and ER are official (box score): runs are charged to the pitcher who put the runner on."
     if official == "some":

@@ -39,9 +39,10 @@ def performance_line(df: pd.DataFrame) -> dict:
 
     **IP**: outs recorded ÷ 3, shown in baseball notation (3.1 = 3⅓).
     **R** and **ER**: from the official box score for each game with play-by-play loaded and this
-    pitcher's line found there, so runs are charged to the pitcher who put the runner on (A13). For a
-    game without one, R is the sum of RunsScored on his pitches (runs that scored while he was
-    pitching) and ER is unknown, so ER shows "—" unless every game is official.
+    pitcher's line found there, so runs are charged to the pitcher who put the runner on (A13). In a
+    game with a coach sheet and no official line for him, R is charged the same way from the sheet
+    (C1) and ER is unknown. For a game with neither, R is the sum of RunsScored on his pitches (runs
+    that scored while he was pitching) and ER is unknown. ER shows "—" unless it is known for every game.
     **Strike %**: strikes (rule 12) ÷ pitches. Min n: MIN_N['pitches'].
     **First-Pitch Strike %**: strikes on the first pitch of a PA ÷ PAs this pitcher threw the first
     pitch of. Min n: MIN_N['first_pitches'].
@@ -49,12 +50,15 @@ def performance_line(df: pd.DataFrame) -> dict:
     c = batting_counts(df)
     outs = outs_recorded(df)
     official = df["off_line"] if "off_line" in df else pd.Series(False, index=df.index)
+    er_known = df["off_er"] if "off_er" in df else official
+    coach = df["gs_coach"] if "gs_coach" in df else pd.Series(False, index=df.index)
     runs = int(df.loc[official, "off_R"].sum() + df.loc[~official, "RunsScored"].fillna(0).sum()) \
         if official.any() else int(df["RunsScored"].fillna(0).sum())
     return {
         "IP": format_ip(outs), "outs": outs, "PA": c["PA"], "H": c["H"],
-        "R": runs, "ER": int(df["off_ER"].sum()) if len(df) and official.all() else "—",
+        "R": runs, "ER": int(df["off_ER"].sum()) if len(df) and er_known.all() else "—",
         "runs_official": "all" if len(df) and official.all() else ("some" if official.any() else "none"),
+        "runs_from_sheet": bool((official & ~er_known & coach).any()),
         "BB": c["BB"] + c["IBB"], "K": c["K"], "HR": c["HR"], "HBP": c["HBP"],
         "Strike %": rate(df["is_strike"], pd.Series(True, index=df.index), "pitches"),
         "First-Pitch Strike %": rate(df["is_strike"], df["is_first_pitch"], "first_pitches"),

@@ -386,8 +386,8 @@ def _draw_hitter(c: Canvas, r: hitter_report.HitterReport, filters_note: str,
 
 ROSTER_CELL = ParagraphStyle("roster", parent=CELL, fontSize=6.6, leading=7.6)
 ROSTER_NOTE = ("Each row is that player's numbers for the same games and filters. A player's score is his "
-               "average over his games; the team score in the header is the average of every player's game "
-               "scores. Grey = below the minimum sample.")
+               "average over his games; the team score in the header averages every player's game scores, "
+               "weighted by plate appearances. Grey = below the minimum sample.")
 
 
 def _roster_table(roster: pd.DataFrame, label_w: float = 92) -> Table:

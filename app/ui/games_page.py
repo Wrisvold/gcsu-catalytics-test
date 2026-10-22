@@ -213,9 +213,15 @@ def pbp_panel(conn, g: pd.Series, key: str) -> None:
                     f"{m.tm_pas}** TrackMan plate appearances ({m.official_pas} {kind}) · from "
                     f"{stored['source']}")
         if coach:
-            st.caption("This is the coaches' own play-by-play, not the official box score; reports say so. "
-                       + ("R / ER are from the official pitching lines it replaced." if box.pitching else
-                          "R is TrackMan's and ER isn't known (no official pitching lines)."))
+            if box.pitching:
+                runs = "R / ER are from the official pitching lines it replaced."
+            elif m.uncharged_runs:
+                runs = (f"R is TrackMan's: {m.uncharged_runs} run(s) scored by a runner whose plate appearance "
+                        "isn't matched to TrackMan, so runs can't be charged from the sheet. ER isn't known.")
+            else:
+                runs = ("Each run is charged to the pitcher who let that runner on (TrackMan's pitcher for the "
+                        "plate appearance he reached on). ER isn't known without the official box score.")
+            st.caption("This is the coaches' own play-by-play, not the official box score; reports say so. " + runs)
         problems = [("Play-by-play checks", m.replay_warnings),
                     (f"TrackMan and the {kind} scoring disagree", m.disagreements),
                     (f"TrackMan plate appearances with no {kind} match", m.unmatched_tm),

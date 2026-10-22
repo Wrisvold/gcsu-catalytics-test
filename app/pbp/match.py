@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from pbp.boxscore import BoxScore, PitcherLine
-from pbp.plays import PlateAppearance, name_similarity, replay
+from pbp.plays import PlateAppearance, name_similarity, replay, run_sources
 
 MIN_NAME_SIMILARITY = 0.5   # to pair two plate appearances when the counts differ
 MIN_PITCHER_SIMILARITY = 0.75
@@ -52,6 +52,8 @@ class GameMatch:
     unmatched_pitchers: list[str] = field(default_factory=list)
     replay_warnings: list[str] = field(default_factory=list)
     pairs: dict[int, int] = field(default_factory=dict)   # official PA (index in replay().pas) -> TrackMan pa_id
+    charged_runs: dict[str, int] = field(default_factory=dict)  # TrackMan PitcherId -> runs, from the replay
+    uncharged_runs: int = 0                    # runs whose runner reached on a PA with no TrackMan match
 
     @property
     def ok(self) -> bool:
@@ -127,6 +129,15 @@ def match_game(game: pd.DataFrame, box: BoxScore) -> GameMatch:
         out.unmatched_official += [f"{where}: {p.batter}" for j, p in enumerate(off) if j not in paired_off]
     out.matched = len(rows)
     out.pa_state = pd.DataFrame(rows)
+
+    # Runs, charged to the pitcher who let each runner on (the TrackMan pitcher of the PA he reached on).
+    pitcher_of = dict(zip(ends["pa_id"].astype(int), ends["PitcherId"].astype(str)))
+    for i in run_sources(rep):
+        pid = pitcher_of.get(out.pairs.get(i)) if i is not None else None
+        if pid is None:
+            out.uncharged_runs += 1
+        else:
+            out.charged_runs[pid] = out.charged_runs.get(pid, 0) + 1
 
     # Pitchers: those who threw in the top half pitch for the home team.
     side = game.groupby("PitcherId").agg(name=("Pitcher", "last"),

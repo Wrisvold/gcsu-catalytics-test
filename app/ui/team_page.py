@@ -17,9 +17,9 @@ from ui.common import (
     filters_text, footer, frame, get_conn, report_filters, section, show_table, thresholds_note,
 )
 
-TEAM_SCORE_NOTE = ("Team scores are the average of every player's game scores: each pitcher's outing, or each "
-                   "hitter's game, counts once. Each player's own score is in the table, and his game-by-game "
-                   "breakdown is on his individual report.")
+TEAM_SCORE_NOTE = ("Team scores average every player's game scores, each weighted by its plate appearances "
+                   "(batters faced, for a pitcher), so a starter counts for more than a one-batter reliever. Each "
+                   "player's own score is in the table, and his game-by-game breakdown is on his individual report.")
 
 
 def _team_picker(df: pd.DataFrame, kind: str) -> str:
