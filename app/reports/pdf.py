@@ -49,7 +49,7 @@ GAP = 5
 CHART_DPI = 220
 
 NAVY, GREEN = HexColor(config.NAVY), HexColor(config.GREEN)
-PALE_GREEN, PALE_TEXT = HexColor("#7FD39A"), HexColor("#C9D3DF")
+PALE_GREEN, PALE_TEXT = HexColor(config.GOLD), HexColor("#D5DCE8")  # accent text on the blue bands
 LOW_BG, LOW_TEXT = HexColor("#ECECEC"), HexColor(config.LOW_SAMPLE_TEXT)
 ZEBRA, RULE = HexColor("#F6F7F9"), HexColor(config.LIGHT_GREY)
 
@@ -86,7 +86,7 @@ def _header(c: Canvas, top: float, kind: str, name: str, season: str, dates: str
         c.setFont(BOLD, 7.5)
         c.drawCentredString(cx, cy + 1.5, "GCSU")
         c.drawCentredString(cx, cy - 7.5, "BASEBALL")
-    c.setStrokeColor(GREEN)
+    c.setStrokeColor(PALE_GREEN)
     c.setLineWidth(2.5)
     c.line(x + 72, y + 9, x + 72, y + h - 9)
     c.setFillColor(white)
@@ -164,7 +164,7 @@ def _tiles(c: Canvas, top: float, items: list[tuple[str, object]]) -> float:
     for i, (label, v) in enumerate(items):
         cx = MARGIN + w * (i + 0.5)
         if i:
-            c.setStrokeColor(GREEN)
+            c.setStrokeColor(PALE_GREEN)
             c.setLineWidth(0.6)
             c.line(MARGIN + w * i, y + 5, MARGIN + w * i, y + h - 5)
         c.setFillColor(PALE_TEXT)

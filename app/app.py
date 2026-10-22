@@ -9,7 +9,11 @@ from ui.common import inject_css, require_user
 
 if config.SERVER_MODE:  # audit lines (ui.common.audit) go to stdout, which the container platform collects
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s", force=True)
-st.set_page_config(page_title=config.APP_TITLE, page_icon="⚾", layout="wide")
+st.set_page_config(page_title=config.APP_TITLE, layout="wide",
+                   page_icon=str(config.LOGO_PATH) if config.LOGO_PATH.exists() else "⚾")
+if config.LOGO_WIDE_PATH.exists():
+    st.logo(str(config.LOGO_WIDE_PATH), size="large",
+            icon_image=str(config.LOGO_PATH) if config.LOGO_PATH.exists() else None)
 inject_css()
 require_user()
 st.sidebar.markdown(f"## {config.APP_TITLE}")

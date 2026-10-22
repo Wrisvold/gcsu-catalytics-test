@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import functools
 import json
 import logging
 from datetime import date
@@ -24,23 +25,24 @@ from reports.tables import Col, build_table
 
 CSS = f"""
 <style>
-:root {{ --navy: {config.NAVY}; --green: {config.GREEN}; --grey: {config.LIGHT_GREY};
+:root {{ --navy: {config.NAVY}; --green: {config.GREEN}; --gold: {config.GOLD}; --grey: {config.LIGHT_GREY};
          --low: {config.LOW_SAMPLE_GREY}; --lowtext: {config.LOW_SAMPLE_TEXT}; }}
 .gc-header {{ background: var(--navy); color: white; border-radius: 6px; padding: 14px 20px;
               display: flex; align-items: center; gap: 22px; margin-bottom: 10px; flex-wrap: wrap; }}
 .gc-mark {{ width: 78px; height: 78px; border-radius: 50%; border: 3px solid var(--green);
             display: flex; align-items: center; justify-content: center; text-align: center;
             font-weight: 800; font-size: 13px; line-height: 1.1; flex: none; }}
-.gc-mark img {{ width: 78px; height: 78px; border-radius: 50%; }}
-.gc-titles {{ flex: 1; min-width: 260px; border-left: 3px solid var(--green); padding-left: 16px; }}
+.gc-logo {{ flex: none; }}
+.gc-logo img {{ height: 84px; width: auto; display: block; }}
+.gc-titles {{ flex: 1; min-width: 260px; border-left: 3px solid var(--gold); padding-left: 16px; }}
 .gc-title {{ font-size: 34px; font-weight: 900; letter-spacing: 1px; line-height: 1; }}
-.gc-sub {{ font-size: 20px; font-weight: 800; color: #7FD39A; margin-top: 4px; }}
+.gc-sub {{ font-size: 20px; font-weight: 800; color: var(--gold); margin-top: 4px; }}
 .gc-values {{ font-size: 10px; letter-spacing: 1px; color: #C9D3DF; margin-top: 6px; }}
 .gc-player {{ text-align: right; min-width: 220px; margin-left: auto; }}
 .gc-player .name {{ font-size: 22px; font-weight: 800; text-transform: uppercase; }}
-.gc-player .season {{ color: #7FD39A; font-weight: 700; }}
+.gc-player .season {{ color: var(--gold); font-weight: 700; }}
 .gc-player .dates {{ font-size: 12px; color: #C9D3DF; }}
-.gc-grade {{ margin-top: 6px; border: 2px solid #7FD39A; border-radius: 4px; padding: 3px 8px;
+.gc-grade {{ margin-top: 6px; border: 2px solid var(--gold); border-radius: 4px; padding: 3px 8px;
              font-size: 11px; color: #C9D3DF; display: inline-block; margin-left: 6px; }}
 .gc-grade b {{ color: white; font-size: 18px; margin: 0 4px; }}
 .gc-section {{ background: var(--navy); color: white; border-radius: 4px; padding: 6px 12px; margin: 18px 0 8px;
@@ -49,7 +51,7 @@ CSS = f"""
 .gc-section .note {{ margin-left: auto; font-size: 11px; font-weight: 500; color: #C9D3DF; }}
 .gc-tiles {{ display: flex; background: var(--navy); border-radius: 6px; padding: 6px 0; flex-wrap: wrap; }}
 .gc-tile {{ flex: 1; min-width: 92px; text-align: center; color: white; padding: 6px 4px;
-            border-right: 1px solid var(--green); }}
+            border-right: 1px solid var(--gold); }}
 .gc-tile:last-child {{ border-right: none; }}
 .gc-tile .lab {{ font-size: 11px; font-weight: 700; color: #C9D3DF; text-transform: uppercase; }}
 .gc-tile .val {{ font-size: 24px; font-weight: 800; }}
@@ -160,10 +162,11 @@ def frame(f: ReportFilters) -> pd.DataFrame:
 
 # --- Branding -----------------------------------------------------------------------------------
 
+@functools.cache
 def _wordmark() -> str:
     if config.LOGO_PATH.exists():
         b64 = base64.b64encode(config.LOGO_PATH.read_bytes()).decode()
-        return f'<div class="gc-mark"><img src="data:image/png;base64,{b64}" alt="GCSU logo"></div>'
+        return f'<div class="gc-logo"><img src="data:image/png;base64,{b64}" alt="GCSU Bobcats logo"></div>'
     return '<div class="gc-mark">GCSU<br>BASEBALL</div>'
 
 

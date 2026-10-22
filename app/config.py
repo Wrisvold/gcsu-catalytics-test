@@ -24,7 +24,11 @@ EXPORT_DIR = ROOT / "exports"
 # nothing after the tab closes, offers PDFs as downloads instead of saving to exports/, and has no
 # weather lookup. On when a DEMO_MODE file sits next to this one or GCSU_CATALYTICS_DEMO=1.
 DEMO_MODE = os.environ.get("GCSU_CATALYTICS_DEMO") == "1" or (ROOT / "DEMO_MODE").exists()
+# GCSU's Primary Athletics Marks (GCSU Art Sheet, revised 06/23): the Bobcat head (square, report headers
+# and the browser tab) and the Bobcat with "Georgia College & State University" (wide, the app's sidebar).
+# The marks are licensed through CLC; keep them out of public copies such as the GitHub Pages test site.
 LOGO_PATH = ROOT / "assets" / "logo.png"
+LOGO_WIDE_PATH = ROOT / "assets" / "logo_wide.png"
 
 # --- Server mode (GCSU's AWS; DEPLOY.md) ----------------------------------------------------------
 # On with GCSU_CATALYTICS_SERVER=1. PDFs come as downloads (nothing is written to the server's disk but
@@ -43,8 +47,11 @@ ALLOWED_USERS = {u.strip().lower() for u in os.environ.get("GCSU_CATALYTICS_ALLO
                  if u.strip()}
 
 # --- Branding -----------------------------------------------------------------------------------
-NAVY = "#0B2545"  # TODO: confirm official values with GCSU Athletics
-GREEN = "#1B7A3E"  # TODO: confirm official values with GCSU Athletics
+# Approved colors from the GCSU Art Sheet (revised 06/23). The athletics marks are blue and green, so the
+# dark bands are GCSU Blue, the accents GCSU Green, and light text on the bands GCSU Gold.
+NAVY = "#1F3D7B"   # GCSU Blue, PMS 287C (the name NAVY is kept: it's the dark band color everywhere)
+GREEN = "#245C4F"  # GCSU Green, PMS 626C
+GOLD = "#C6B784"   # GCSU Gold, PMS 452C
 LIGHT_GREY = "#E6E8EB"
 LOW_SAMPLE_GREY = "#BDBDBD"  # fill for cells below their minimum n (Section 4b)
 
