@@ -1,6 +1,8 @@
 """Load Data and Game Context pages (P3). Loading a CSV shows a context form for each GameID in it."""
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 import streamlit as st
 
@@ -284,7 +286,7 @@ def load_page() -> None:
     n = db.count_pitches(conn)
     games = db.get_games(conn)
     where = ("on GCSU's server, open only to signed-in staff" if config.SERVER_MODE
-             else "in your browser" if config.DEMO_MODE else "on this computer")
+             else "in this browser on this computer" if config.DEMO_MODE else "on this computer")
     st.markdown(f"The database holds **{n} pitches** from **{len(games)} game(s)**. Everything stays {where}.")
 
     files = st.file_uploader("TrackMan CSV export(s)", type=["csv"], accept_multiple_files=True,
@@ -332,6 +334,54 @@ def load_page() -> None:
             "skipped_duplicate": "Skipped (duplicate)", "skipped_no_uid": "Skipped (no PitchUID)",
             "loaded_by": "Loaded by"}),
             hide_index=True)
+
+    if not config.SERVER_MODE:  # on the server, IT backs up the data volume (DEPLOY.md)
+        backup_panel(conn)
+
+
+def backup_panel(conn) -> None:
+    """Back up the whole database to one file, or replace it with a backup: to keep a copy, or to move
+    the data to another computer or browser."""
+    with st.expander("Back up or restore", icon=":material/backup:",
+                     expanded="restored" in st.session_state):
+        st.markdown("**Back up** saves everything (pitches, game details, play-by-play, pitch-type corrections) "
+                    "in one `.db` file. **Restore** loads such a file on another computer or browser, "
+                    "replacing what is here.")
+        name = f"gcsu_catalytics_backup_{date.today().isoformat()}.db"
+        if config.DEMO_MODE:  # stlite can't build a download when it's clicked: make it first, then save
+            key = ("backup", db.data_version(conn))
+            if st.session_state.get("backup_key") == key:
+                st.download_button("Save backup file", data=st.session_state["backup_bytes"], file_name=name,
+                                   mime="application/octet-stream", icon=":material/download:", on_click="ignore")
+            elif st.button("Make backup file", icon=":material/backup:"):
+                st.session_state["backup_bytes"] = db.backup_bytes(conn)
+                st.session_state["backup_key"] = key
+                st.rerun()
+        else:
+            st.download_button("Download backup file", data=lambda: db.backup_bytes(conn), file_name=name,
+                               mime="application/octet-stream", icon=":material/download:", on_click="ignore")
+        st.divider()
+        if done := st.session_state.pop("restored", None):
+            st.success(done)
+        # A new key after each restore empties the uploader, so the restored file isn't offered again.
+        n_restores = st.session_state.get("n_restores", 0)
+        up = st.file_uploader("Restore from a backup file", type=["db"], key=f"restore_file_{n_restores}")
+        if up is not None:
+            sure = st.checkbox(f"Replace everything here ({db.count_pitches(conn)} pitches) with this backup",
+                               key=f"restore_sure_{n_restores}")
+            if st.button("Restore", type="primary", disabled=not sure, icon=":material/restore:"):
+                try:
+                    n = db.restore(conn, up.getvalue())
+                except db.RestoreError as e:
+                    st.error(str(e))
+                else:
+                    audit("restore_backup", f"file={up.name} pitches={n}")
+                    st.cache_data.clear()
+                    for k in ("demo_pdfs", "last_load", "last_load_errors", "backup_key"):
+                        st.session_state.pop(k, None)
+                    st.session_state["n_restores"] = n_restores + 1
+                    st.session_state["restored"] = f"Restored {n} pitches from {up.name}."
+                    st.rerun()  # redraw so the counts at the top of the page are the restored ones
 
 
 def context_page() -> None:

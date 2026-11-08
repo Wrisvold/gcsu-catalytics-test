@@ -75,8 +75,8 @@ def _header(c: Canvas, top: float, kind: str, name: str, season: str, dates: str
     c.setFillColor(NAVY)
     c.roundRect(x, y, CONTENT_W, h, 4, stroke=0, fill=1)
     cx, cy = x + 36, y + h / 2
-    if config.LOGO_PATH.exists():
-        c.drawImage(ImageReader(str(config.LOGO_PATH)), cx - 27, cy - 27, 54, 54, mask="auto",
+    if logo := config.mark(config.LOGO_PATH):
+        c.drawImage(ImageReader(str(logo)), cx - 27, cy - 27, 54, 54, mask="auto",
                     preserveAspectRatio=True)
     else:
         c.setStrokeColor(GREEN)
@@ -382,6 +382,102 @@ def _draw_hitter(c: Canvas, r: hitter_report.HitterReport, filters_note: str,
     return _draw(c, y, splits_note) - bottom
 
 
+SEQ_CELL = ParagraphStyle("seq", parent=CELL, fontSize=6.6, leading=8)
+SEQ_LEFT = ParagraphStyle("seqleft", parent=SEQ_CELL, alignment=0)
+_TABLE_STYLE = [("BACKGROUND", (0, 0), (-1, 0), NAVY), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 1.8), ("BOTTOMPADDING", (0, 0), (-1, -1), 1.8),
+                ("LEFTPADDING", (0, 0), (-1, -1), 2.5), ("RIGHTPADDING", (0, 0), (-1, -1), 2.5),
+                ("LINEBELOW", (0, 1), (-1, -1), 0.4, RULE)]
+
+
+def _count_mix_table(mix: pd.DataFrame) -> Table | None:
+    types, rows = hitter_report.count_mix_rows(mix)
+    if not rows:
+        return None
+    data = [[Paragraph("Count", HEAD), Paragraph("Pitches", HEAD)]
+            + [Paragraph(f'<font color="{config.PITCH_TYPES.get(t, config.PITCH_TYPES["OT"])["color"]}">●</font> '
+                         f'{config.PITCH_TYPES.get(t, config.PITCH_TYPES["OT"])["label"]}', HEAD) for t in types]]
+    style = list(_TABLE_STYLE)
+    for i, (label, vals) in enumerate(rows, start=1):
+        data.append([Paragraph(label, LABEL)] + [Paragraph(v, SEQ_CELL) for v in vals])
+        if not label[0].isdigit():
+            style.append(("BACKGROUND", (0, i), (-1, i), HexColor("#E8EDF4")))
+        elif i % 2 == 0:
+            style.append(("BACKGROUND", (0, i), (-1, i), ZEBRA))
+    label_w, n_w = 70, 44
+    t = Table(data, colWidths=[label_w, n_w] + [(CONTENT_W - label_w - n_w) / len(types)] * len(types))
+    t.setStyle(TableStyle(style))
+    return t
+
+
+SEQ_WIDTHS = {"Date": 30, "Opp": 52, "PA": 20, "Inn": 20, "Pitcher": 92, "Result": 68}
+
+
+def _sequence_table(seq: pd.DataFrame) -> Table | None:
+    rows = hitter_report.sequence_rows(seq)
+    if not rows:
+        return None
+    cols = list(rows[0])
+
+    def tag(code: str, color: str) -> str:
+        return f'<font color="{color}"><b>{code}</b></font>'
+
+    data = [[Paragraph(c, HEAD) for c in cols]]
+    for row in rows:
+        data.append([Paragraph(hitter_report.colored_sequence(v, tag), SEQ_LEFT) if k == "Sequence"
+                     else Paragraph(v, LABEL if k == "Pitcher" else SEQ_CELL) for k, v in row.items()])
+    style = list(_TABLE_STYLE) + [("BACKGROUND", (0, r), (-1, r), ZEBRA) for r in range(2, len(data), 2)]
+    seq_w = CONTENT_W - sum(SEQ_WIDTHS.values())
+    t = Table(data, colWidths=[SEQ_WIDTHS.get(c, seq_w) for c in cols], repeatRows=1)
+    t.setStyle(TableStyle(style))
+    return t
+
+
+def _draw_hitter_page2(c: Canvas, r: hitter_report.HitterReport, filters_note: str,
+                       title: str = "Individual Hitter Report") -> None:
+    """Page 2 (and more if needed): pitch mix by count, then every plate appearance pitch by pitch. The
+    sequence table carries on to further pages, each with the header and footer."""
+    extra = f"Bats {r.bats_short} · {r.scope.games} game(s) · {r.scope.game_types_text}"
+    rest = [_sequence_table(r.sequences)]
+    first = True
+    while rest:
+        bottom = _footer(c, footer_note(r.scope, filters_note))
+        y = _header(c, PAGE_H - MARGIN, title, r.name, r.scope.season_text, r.scope.date_text, extra, r.grades) - GAP
+        if first:
+            y = _section(c, y, 5, "Pitch Mix by Count", "% of pitches seen in each count") - 2
+            mix = _count_mix_table(r.count_mix)
+            if mix is not None:
+                y = _draw(c, y, mix) - 1.5
+                y = _paragraph(c, y, hitter_report.COUNT_MIX_NOTE) - GAP
+            else:
+                y = _paragraph(c, y, "No pitches with a count.") - GAP
+        y = _section(c, y, 6, "At-Bat Sequences" + ("" if first else " (continued)"),
+                     f"{len(r.sequences)} plate appearances") - 2
+        first = False
+        table = rest.pop()
+        if table is None:
+            _paragraph(c, y, "No plate appearances.")
+            break
+        note = Paragraph(hitter_report.SEQUENCE_NOTE, NOTE)
+        room = y - bottom - _height(note) - 4
+        pieces = table.split(CONTENT_W, room) if _height(table) > room else [table]
+        y = _draw(c, y, pieces[0]) - 2
+        if len(pieces) > 1:
+            rest.append(pieces[1])
+            c.showPage()
+        else:
+            _draw(c, y, note)
+
+
+def _draw_hitter_full(c: Canvas, r: hitter_report.HitterReport, filters_note: str) -> float:
+    """The individual hitter report: page 1, then page 2 (count mix and at-bat sequences). Returns page 1's
+    room above the footer."""
+    slack = _draw_hitter(c, r, filters_note)
+    c.showPage()
+    _draw_hitter_page2(c, r, filters_note)
+    return slack
+
+
 # --- Team reports -------------------------------------------------------------------------------
 
 ROSTER_CELL = ParagraphStyle("roster", parent=CELL, fontSize=6.6, leading=7.6)
@@ -488,8 +584,9 @@ def pitcher_pdf(r: pitcher_report.PitcherReport, out, filters_note: str = "") ->
 
 
 def hitter_pdf(r: hitter_report.HitterReport, out, filters_note: str = "") -> float:
-    """Write one hitter's one-page report to `out` (a path or a binary file object)."""
-    return _render([(_draw_hitter, r)], f"{r.name}, hitter report", out, filters_note)[0]
+    """Write one hitter's report (page 1, then count mix and at-bat sequences) to `out` (a path or a binary
+    file object)."""
+    return _render([(_draw_hitter_full, r)], f"{r.name}, hitter report", out, filters_note)[0]
 
 
 def pdf_bytes(kind: str, report, filters_note: str = "") -> bytes:
@@ -509,7 +606,7 @@ def _kind(kind: str):
     """(roster, build, write, draw) for kind "pitcher" or "hitter"."""
     if kind == "pitcher":
         return pitching.list_pitchers, "PitcherId", "PitcherTeam", pitcher_report.build, pitcher_pdf, _draw_pitcher
-    return hitting.list_hitters, "hitter_id", "BatterTeam", hitter_report.build, hitter_pdf, _draw_hitter
+    return hitting.list_hitters, "hitter_id", "BatterTeam", hitter_report.build, hitter_pdf, _draw_hitter_full
 
 
 def roster_ids(df: pd.DataFrame, kind: str, gcsu_only: bool = False) -> list[str]:

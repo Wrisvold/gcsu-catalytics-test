@@ -1,6 +1,8 @@
 """Hitter Report page (P2)."""
 from __future__ import annotations
 
+from html import escape
+
 import streamlit as st
 
 import config
@@ -10,9 +12,10 @@ from metrics import hitting
 from reports import hitter as report
 from reports.context import pbp_note
 from reports.tables import BREAKDOWN_COLS, HITTER_SPLIT_COLS
+from ui import decisions
 from ui.common import (
-    SCORES_NOTE, footer, frame, get_conn, header, pdf_controls, report_filters, score_breakdown, section, show_table,
-    stat_table, thresholds_note, tiles,
+    SCORES_NOTE, footer, frame, get_conn, header, pdf_controls, pitch_label_html, report_filters, score_breakdown,
+    section, show_table, stat_table, thresholds_note, tiles,
 )
 
 
@@ -34,8 +37,9 @@ def render() -> None:
         return
     pdf_controls("hitter", r, df, f, len(roster))
     show(r)
+    show_page2(r)
 
-    section(5, "Scores", "1–100, from the coaches' scoring sheet")
+    section(7, "Scores", "1–100, from the coaches' scoring sheet")
     score_breakdown(r.grades)
     st.caption(SCORES_NOTE)
 
@@ -66,7 +70,7 @@ def show(r: report.HitterReport, title: str = "Individual Hitter Report", who: s
     c1, c2, c3 = st.columns(3)
     c1.pyplot(ch.contact_chart(r.contact))
     c2.pyplot(ch.spray_chart(r.spray))
-    c3.pyplot(ch.swing_decisions_chart(r.decisions, r.decision_counts))
+    decisions.render(c3, r.decisions, r.decision_counts, key=f"decisions_{r.hitter_id}")
     c1, c2, c3 = st.columns(3)
     c1.pyplot(zone_heatmap(r.zone_ev, "Strike Zone Exit Velo", config.ZONE_EV_SCALE, "balls in play"))
     c2.pyplot(zone_heatmap(r.zone_avg, "Strike Zone AVG", config.ZONE_AVG_SCALE, "at-bats"))
@@ -74,3 +78,38 @@ def show(r: report.HitterReport, title: str = "Individual Hitter Report", who: s
 
     section(4, "Splits: Pitcher Hand & Velo Tier")
     show_table(stat_table(r.splits, HITTER_SPLIT_COLS, row_label=str, label_header="Split"), report.SPLITS_NOTE)
+
+
+def _code_html(code: str, color: str) -> str:
+    return f'<b style="color:{color}">{escape(code)}</b>'
+
+
+def show_page2(r: report.HitterReport) -> None:
+    """Sections 5 and 6 (page 2 of the PDF): the pitch mix in each count, then every plate appearance
+    pitch by pitch."""
+    section(5, "Pitch Mix by Count", "% of pitches seen in each count")
+    types, mix = report.count_mix_rows(r.count_mix)
+    if mix:
+        head = "<th>Count</th><th>Pitches</th>" + "".join(
+            f"<th>{pitch_label_html(t)}</th>" for t in types)
+        body = "".join(
+            f'<tr class="{"grp" if not label[0].isdigit() else ""}"><td class="lab">{escape(label)}</td>'
+            + "".join(f"<td>{escape(v)}</td>" for v in vals) + "</tr>" for label, vals in mix)
+        show_table(f'<div class="gc-scroll"><table class="gc"><thead><tr>{head}</tr></thead>'
+                   f'<tbody>{body}</tbody></table></div>', report.COUNT_MIX_NOTE)
+    else:
+        st.caption("No pitches with a count.")
+
+    section(6, "At-Bat Sequences", f"{len(r.sequences)} plate appearances")
+    rows = report.sequence_rows(r.sequences)
+    if rows:
+        head = "".join(f"<th>{h}</th>" for h in rows[0])
+        body = "".join(
+            "<tr>" + "".join(
+                f'<td style="text-align:left">{report.colored_sequence(escape(v), _code_html)}</td>' if k == "Sequence"
+                else f'<td class="lab">{escape(v)}</td>' if k == "Pitcher" else f"<td>{escape(v)}</td>"
+                for k, v in row.items()) + "</tr>" for row in rows)
+        show_table(f'<div class="gc-scroll"><table class="gc"><thead><tr>{head}</tr></thead>'
+                   f'<tbody>{body}</tbody></table></div>', report.SEQUENCE_NOTE)
+    else:
+        st.caption("No plate appearances.")

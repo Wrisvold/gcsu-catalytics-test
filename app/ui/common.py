@@ -65,6 +65,7 @@ table.gc td {{ padding: 4px 6px; text-align: center; border-bottom: 1px solid va
 table.gc td.lab {{ text-align: left; white-space: nowrap; font-weight: 600; }}
 table.gc tr:nth-child(even) td {{ background: #F6F7F9; }}
 table.gc tr.all td {{ background: var(--navy); color: white; font-weight: 700; }}
+table.gc tr.grp td {{ background: #E8EDF4 !important; font-style: italic; }}
 table.gc td .n {{ display: block; font-size: 10px; color: #6B7785; line-height: 1; }}
 table.gc tr.all td .n {{ color: #C9D3DF; }}
 table.gc td.low {{ color: var(--lowtext); background: #ECECEC !important; }}
@@ -164,8 +165,8 @@ def frame(f: ReportFilters) -> pd.DataFrame:
 
 @functools.cache
 def _wordmark() -> str:
-    if config.LOGO_PATH.exists():
-        b64 = base64.b64encode(config.LOGO_PATH.read_bytes()).decode()
+    if logo := config.mark(config.LOGO_PATH):
+        b64 = base64.b64encode(logo.read_bytes()).decode()
         return f'<div class="gc-logo"><img src="data:image/png;base64,{b64}" alt="GCSU Bobcats logo"></div>'
     return '<div class="gc-mark">GCSU<br>BASEBALL</div>'
 
@@ -354,7 +355,7 @@ def pdf_controls(kind: str, report, df: pd.DataFrame, f: ReportFilters, roster_s
         sb.success(f"Saved {len(paths)} PDFs to {config.EXPORT_DIR}")
 
 
-PRINT_HELP = "Every player's report in one PDF, one page each, in name order: open it and print once."
+PRINT_HELP = "Every player's report in one PDF, in name order: open it and print once."
 
 
 def _demo_pdf_controls(kind: str, report, df: pd.DataFrame, f: ReportFilters, note: str, plural: str,

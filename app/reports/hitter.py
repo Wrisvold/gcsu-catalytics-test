@@ -28,6 +28,8 @@ class HitterReport:
     decisions: pd.DataFrame
     decision_counts: dict[str, int]
     splits: pd.DataFrame       # vs RHP / LHP, then by pitcher velo tier
+    sequences: pd.DataFrame    # page 2: one row per PA, every pitch as count + type
+    count_mix: pd.DataFrame    # page 2: pitch-type % in each count
     score: scores.ScoreSummary
     clutch: scores.ScoreSummary
 
@@ -45,6 +47,12 @@ class HitterReport:
 
 SPLITS_NOTE = ("Velo tier = the pitcher's average fastball velo (four-seam and sinker) over the games in this "
                "report. HH %, Avg EV and Max EV use tracked balls in play. BABIP = (H − HR) ÷ (AB − K − HR + SF).")
+
+
+SEQUENCE_NOTE = ("Each pitch is the count before it, then the pitch type. PA = his trip to the plate in that game "
+                 "(1 = first). Result uses the official scoring where the play-by-play is loaded.")
+COUNT_MIX_NOTE = ("% of the pitches he saw in each count that were each pitch type (each row adds to 100%). The "
+                  "count is balls-strikes before the pitch. Even includes 0-0; two strikes includes 3-2.")
 
 
 def key_note(k: dict) -> str:
@@ -90,6 +98,42 @@ def assemble(h: pd.DataFrame, hitter_id: str, name: str, score: scores.ScoreSumm
         decisions=points,
         decision_counts=counts,
         splits=hitting.pitcher_splits(h),
+        sequences=hitting.at_bat_sequences(h),
+        count_mix=hitting.pitch_mix_by_count(h),
         score=score,
         clutch=clutch,
     )
+
+
+# --- Page 2: at-bat sequences and pitch mix by count ---------------------------------------------
+
+def colored_sequence(seq: str, color_tag) -> str:
+    """The sequence text with each pitch code wrapped by `color_tag(code, color)` (HTML for the app,
+    ReportLab markup for the PDF). "0-0 FF, 0-1 SL" -> "0-0 <FF>, 0-1 <SL>"."""
+    out = []
+    for item in seq.split(", ") if seq else []:
+        count, _, code = item.rpartition(" ")
+        pt = config.PITCH_TYPES.get(code, config.PITCH_TYPES["OT"])
+        out.append(f"{count} {color_tag(code, pt['color'])}".strip())
+    return ", ".join(out)
+
+
+def sequence_rows(seq: pd.DataFrame) -> list[dict]:
+    """At-bat sequences as display text, one dict per PA: Date, Opp, PA, Inn, Pitcher, Sequence, Result."""
+    rows = []
+    for r in seq.itertuples(index=False):
+        hand = f" ({r.throws}HP)" if r.throws in ("R", "L") else ""
+        d = pd.Timestamp(r.game_date) if r.game_date else None
+        rows.append({"Date": f"{d.month}/{d.day}" if d is not None else "—", "Opp": r.game_opponent or "—",
+                     "PA": str(r.pa_no), "Inn": "" if pd.isna(r.Inning) else str(int(r.Inning)),
+                     "Pitcher": display_name(r.pitcher or "") + hand, "Sequence": r.sequence,
+                     "Result": r.result or "—"})
+    return rows
+
+
+def count_mix_rows(mix: pd.DataFrame) -> tuple[list[str], list[tuple[str, list[str]]]]:
+    """Pitch mix by count as text: (pitch-type codes in column order, [(row label, ["n", "40%", ...])])."""
+    types = [c for c in mix.columns if c != "Pitches"]
+    rows = [(label, [str(int(r["Pitches"]))] + [f"{r[t]:.0f}%" if r[t] else "–" for t in types])
+            for label, r in mix.iterrows()]
+    return types, rows

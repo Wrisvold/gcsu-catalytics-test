@@ -116,6 +116,42 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+# --- Backup and restore -------------------------------------------------------------------------
+
+class RestoreError(ValueError):
+    pass
+
+
+def backup_bytes(conn: sqlite3.Connection) -> bytes:
+    """The whole database as one SQLite file, for the Backup button."""
+    conn.commit()
+    return conn.serialize()
+
+
+def restore(conn: sqlite3.Connection, data: bytes) -> int:
+    """Replace everything in the database with a backup made by `backup_bytes`. Checks that `data` is a
+    GCSU Catalytics database first, and brings an older backup up to the current tables. Returns the
+    number of pitches restored. Raises RestoreError, leaving the database as it was, if the file is not
+    a backup."""
+    if not data.startswith(b"SQLite format 3\x00"):
+        raise RestoreError("This file is not a GCSU Catalytics backup (it is not a SQLite database).")
+    src = sqlite3.connect(":memory:")
+    try:
+        src.deserialize(data)
+        tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if not {"pitches", "games"} <= tables:
+            raise RestoreError("This file is not a GCSU Catalytics backup (it has no pitches or games tables).")
+        conn.commit()
+        src.backup(conn)
+    except sqlite3.DatabaseError as e:
+        raise RestoreError(f"This backup file could not be read ({e}).") from e
+    finally:
+        src.close()
+    conn.executescript(SCHEMA)
+    _migrate(conn)
+    return count_pitches(conn)
+
+
 # --- Pitches ------------------------------------------------------------------------------------
 
 def insert_pitches(conn: sqlite3.Connection, rows: list[dict], source_file: str) -> tuple[int, int]:

@@ -15,20 +15,32 @@ DATA_SOURCE_NOTE = "Data: TrackMan."
 
 # --- Paths --------------------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
+# Browser test version (GitHub Pages, built by tools/build_pages.py): runs in the visitor's browser, offers
+# PDFs as downloads instead of saving to exports/, and has no weather lookup. On when a DEMO_MODE file sits
+# next to this one or GCSU_CATALYTICS_DEMO=1.
+DEMO_MODE = os.environ.get("GCSU_CATALYTICS_DEMO") == "1" or (ROOT / "DEMO_MODE").exists()
+# The test version mounts the browser's own storage (IndexedDB) at /mnt, so its database survives closing
+# the tab: it stays in that browser on that computer, never on GitHub or any server.
+BROWSER_STORE = Path("/mnt")
+SAVES_IN_BROWSER = DEMO_MODE and BROWSER_STORE.is_dir()
 # GCSU_CATALYTICS_DATA_DIR moves the database folder (the server's persistent volume, DEPLOY.md).
-DATA_DIR = Path(os.environ.get("GCSU_CATALYTICS_DATA_DIR", ROOT / "data"))
+DATA_DIR = Path(os.environ.get("GCSU_CATALYTICS_DATA_DIR", BROWSER_STORE if SAVES_IN_BROWSER else ROOT / "data"))
 # GCSU_CATALYTICS_DB points the app at another database file (used for testing).
 DB_PATH = Path(os.environ.get("GCSU_CATALYTICS_DB", DATA_DIR / "catalytics.db"))
 EXPORT_DIR = ROOT / "exports"
-# Browser test version (GitHub Pages, built by tools/build_pages.py): runs in the visitor's browser, keeps
-# nothing after the tab closes, offers PDFs as downloads instead of saving to exports/, and has no
-# weather lookup. On when a DEMO_MODE file sits next to this one or GCSU_CATALYTICS_DEMO=1.
-DEMO_MODE = os.environ.get("GCSU_CATALYTICS_DEMO") == "1" or (ROOT / "DEMO_MODE").exists()
 # GCSU's Primary Athletics Marks (GCSU Art Sheet, revised 06/23): the Bobcat head (square, report headers
 # and the browser tab) and the Bobcat with "Georgia College & State University" (wide, the app's sidebar).
-# The marks are licensed through CLC; keep them out of public copies such as the GitHub Pages test site.
+# The marks are licensed through CLC ("any use of these marks will require written approval from CLC"), so
+# they are OFF until GCSU approves them: the app and PDFs then use plain "GCSU BASEBALL" text in GCSU's
+# colors. GCSU_CATALYTICS_MARKS=1 turns them on. Keep them out of public copies such as the test site.
+SHOW_MARKS = os.environ.get("GCSU_CATALYTICS_MARKS") == "1"
 LOGO_PATH = ROOT / "assets" / "logo.png"
 LOGO_WIDE_PATH = ROOT / "assets" / "logo_wide.png"
+
+
+def mark(path: Path) -> Path | None:
+    """`path` (LOGO_PATH or LOGO_WIDE_PATH) when the marks are on and the file is there, else None."""
+    return path if SHOW_MARKS and path.exists() else None
 
 # --- Server mode (GCSU's AWS; DEPLOY.md) ----------------------------------------------------------
 # On with GCSU_CATALYTICS_SERVER=1. PDFs come as downloads (nothing is written to the server's disk but

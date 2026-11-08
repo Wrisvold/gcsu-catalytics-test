@@ -186,15 +186,125 @@ def chase_map(df: pd.DataFrame) -> ChaseMap:
 SWING_DECISIONS = ["Swing, in zone", "Take, in zone", "Chase", "Take, out of zone"]
 
 
+# Pitch-by-pitch wording for the swing-decision details and the at-bat sequences.
+PITCH_CALL_TEXT = {"BallCalled": "Ball", "BallinDirt": "Ball", "BallIntentional": "Intentional ball",
+                   "StrikeCalled": "Called strike", "StrikeSwinging": "Swinging strike", "HitByPitch": "Hit by pitch",
+                   "CatchersInterference": "Catcher's interference", "InPlay": "In play"}
+OUTCOME_TEXT = {"K": "Strikeout", "BB": "Walk", "IBB": "Intentional walk", "HBP": "Hit by pitch",
+                "CI": "Catcher's interference", "1B": "Single", "2B": "Double", "3B": "Triple", "HR": "Home run",
+                "ROE": "Reached on error", "FC": "Fielder's choice", "SF": "Sac fly", "SH": "Sac bunt", "Out": "Out",
+                "InPlayUnknown": "In play"}
+HIT_TYPE_TEXT = {"GroundBall": "groundout", "LineDrive": "lineout", "FlyBall": "flyout", "Popup": "popout",
+                 "Bunt": "bunt out"}
+
+
+def count_text(balls, strikes) -> str:
+    """The count before a pitch, balls first: "1-2". Blank when TrackMan left it out."""
+    if pd.isna(balls) or pd.isna(strikes):
+        return ""
+    return f"{int(balls)}-{int(strikes)}"
+
+
+def outcome_text(outcome, hit_type: str = "") -> str:
+    """How a plate appearance ended, in words. An out on a ball in play says what kind ("Groundout")."""
+    if not isinstance(outcome, str) or not outcome:
+        return ""
+    if outcome == "Out" and hit_type in HIT_TYPE_TEXT:
+        return HIT_TYPE_TEXT[hit_type].capitalize()
+    return OUTCOME_TEXT.get(outcome, outcome)
+
+
+def pitch_result_text(row) -> str:
+    """What happened on one pitch: "Called strike", "Foul", or the PA's result on the pitch that ended it."""
+    if row["pa_end"] and isinstance(row["outcome"], str):
+        return outcome_text(row["outcome"], row.get("TaggedHitType", ""))
+    call = row["PitchCall"] or ""
+    if call.startswith("Foul"):
+        return "Foul"
+    return PITCH_CALL_TEXT.get(call, call)
+
+
+# Pitch details kept with each swing-decision point, for the app's click-a-pitch panel.
+DECISION_DETAIL_COLS = ["game_date", "game_opponent", "Inning", "Pitcher", "PitcherThrows", "Balls", "Strikes",
+                        "RelSpeed", "SpinRate", "InducedVertBreak", "HorzBreak", "PlateLocHeight", "PlateLocSide",
+                        "ev", "la"]
+
+
 def swing_decisions(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
     """**Swing decisions**: every pitch with a tracked location, labelled swing or take, in or out of
-    the zone. Returns the points (catcher's view) and the count in each category."""
+    the zone. Returns the points (catcher's view, with each pitch's details) and the count in each
+    category."""
     t = df[df["loc_tracked"]]
     decision = np.select([t["is_swing"] & t["in_zone"], ~t["is_swing"] & t["in_zone"],
                           t["is_swing"] & t["out_zone"]], SWING_DECISIONS[:3], default=SWING_DECISIONS[3])
     pts = pd.DataFrame({"PitchUID": t["PitchUID"], "plot_x": t["plot_x"], "plot_y": t["plot_y"],
-                        "pitch_type": t["pitch_type"], "decision": decision}).reset_index(drop=True)
+                        "pitch_type": t["pitch_type"], "decision": decision})
+    for c in DECISION_DETAIL_COLS:
+        pts[c] = t[c] if c in t else None
+    pts["count"] = [count_text(b, s) for b, s in zip(t["Balls"], t["Strikes"])]
+    pts["result"] = [pitch_result_text(r) for _, r in t.iterrows()] if len(t) else []
+    pts = pts.reset_index(drop=True)
     return pts, {d: int((pts["decision"] == d).sum()) for d in SWING_DECISIONS}
+
+
+# --- At-bat sequences and pitch mix by count (hitter report page 2) -------------------------------
+
+COUNTS = [f"{b}-{s}" for b in range(4) for s in range(3)]
+COUNT_GROUPS = {  # (label, test on balls and strikes); a count can be in more than one group
+    "Hitter ahead": lambda b, s: b > s,
+    "Even": lambda b, s: b == s,
+    "Hitter behind": lambda b, s: s > b,
+    "Two strikes": lambda b, s: s == 2,
+}
+
+
+def _text(v) -> str:
+    return v if isinstance(v, str) else ""
+
+
+def at_bat_sequences(df: pd.DataFrame) -> pd.DataFrame:
+    """**At-bat sequences**: one row per plate appearance, oldest first: game date and opponent, PA
+    number in that game (1 = his first trip), inning, pitcher and hand, every pitch as the count before
+    it plus the pitch type ("0-0 FF, 0-1 SL, 0-2 SL, 1-2 FF"), and how the PA ended. A PA still going
+    when the file ends (no result) is listed with a blank result."""
+    cols = ["game_date", "GameID", "game_opponent", "pa_no", "Inning", "pitcher", "throws", "pitches",
+            "sequence", "result"]
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+    rows = []
+    for pa_id, p in df.groupby("pa_id", sort=False):
+        last = p.iloc[-1]
+        seq = ", ".join(f"{count_text(b, s)} {t}".strip() for b, s, t in zip(p["Balls"], p["Strikes"], p["pitch_type"]))
+        rows.append({"game_date": last["game_date"], "GameID": last["GameID"],
+                     "game_opponent": _text(last.get("game_opponent")), "Inning": last["Inning"],
+                     "pitcher": last["Pitcher"], "throws": _text(last["PitcherThrows"])[:1], "pitches": len(p),
+                     "sequence": seq,
+                     "result": outcome_text(last["outcome"], last["TaggedHitType"]) if last["pa_end"] else ""})
+    out = pd.DataFrame(rows)
+    out["pa_no"] = out.groupby("GameID").cumcount() + 1
+    return out[cols]
+
+
+def pitch_mix_by_count(df: pd.DataFrame) -> pd.DataFrame:
+    """**Pitch mix by count**: for each count he saw (balls-strikes before the pitch, 0-0 to 3-2) and
+    for four groups of counts (hitter ahead, even, hitter behind, two strikes), how many pitches he saw
+    and what % of them were each pitch type. Columns: "Pitches", then one per pitch type in display
+    order. Rows with no pitches are left out. Each row's % adds to 100 (rounding aside)."""
+    t = df[df["Balls"].notna() & df["Strikes"].notna()]
+    types = pitch_type_order(t["pitch_type"])
+    b, s = t["Balls"].astype(int), t["Strikes"].astype(int)
+    masks = {c: (b == int(c[0])) & (s == int(c[2])) for c in COUNTS}
+    masks.update({g: fn(b, s) for g, fn in COUNT_GROUPS.items()})
+    rows = {}
+    for label, m in masks.items():
+        sub = t[m]
+        if sub.empty:
+            continue
+        row = {"Pitches": len(sub)}
+        vc = sub["pitch_type"].value_counts()
+        row.update({pt: 100.0 * vc.get(pt, 0) / len(sub) for pt in types})
+        rows[label] = row
+    return pd.DataFrame.from_dict(rows, orient="index", columns=["Pitches", *types])
 
 
 def _split_row(sub: pd.DataFrame) -> dict:
