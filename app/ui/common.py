@@ -365,7 +365,7 @@ def _demo_pdf_controls(kind: str, report, df: pd.DataFrame, f: ReportFilters, no
     sb = st.sidebar
     player_id = getattr(report, "pitcher_id", None) or getattr(report, "hitter_id", "")
     version = db.data_version(get_conn())
-    one_key = ("pdf", kind, player_id, dataclasses.astuple(f), version)
+    one_key = ("pdf", kind, player_id, dataclasses.astuple(f), version, getattr(report, "sequence_filter", ""))
     print_key = ("print", kind, gcsu_only, dataclasses.astuple(f), version)
     all_key = ("zip", kind, dataclasses.astuple(f), version)
     made = st.session_state.setdefault("demo_pdfs", {})

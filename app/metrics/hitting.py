@@ -262,12 +262,22 @@ def _text(v) -> str:
     return v if isinstance(v, str) else ""
 
 
+def _pitching_team(pitch) -> str:
+    """Who was pitching: "GCSU" when it was GCSU (intrasquad, or an opponent hitter's report), else the
+    game's Opponent when one is entered, else TrackMan's PitcherTeam code."""
+    code = _text(pitch["PitcherTeam"])
+    if code == config.TEAM_CODE:
+        return "GCSU"
+    return _text(pitch.get("game_opponent")) or code or "Unknown"
+
+
 def at_bat_sequences(df: pd.DataFrame) -> pd.DataFrame:
     """**At-bat sequences**: one row per plate appearance, oldest first: game date and opponent, PA
     number in that game (1 = his first trip), inning, pitcher and hand, every pitch as the count before
     it plus the pitch type ("0-0 FF, 0-1 SL, 0-2 SL, 1-2 FF"), and how the PA ended. A PA still going
-    when the file ends (no result) is listed with a blank result."""
-    cols = ["game_date", "GameID", "game_opponent", "pa_no", "Inning", "pitcher", "throws", "pitches",
+    when the file ends (no result) is listed with a blank result. `team` is the pitching team
+    (`_pitching_team`)."""
+    cols = ["game_date", "GameID", "game_opponent", "team", "pa_no", "Inning", "pitcher", "throws", "pitches",
             "sequence", "result"]
     if df.empty:
         return pd.DataFrame(columns=cols)
@@ -276,7 +286,9 @@ def at_bat_sequences(df: pd.DataFrame) -> pd.DataFrame:
         last = p.iloc[-1]
         seq = ", ".join(f"{count_text(b, s)} {t}".strip() for b, s, t in zip(p["Balls"], p["Strikes"], p["pitch_type"]))
         rows.append({"game_date": last["game_date"], "GameID": last["GameID"],
-                     "game_opponent": _text(last.get("game_opponent")), "Inning": last["Inning"],
+                     "game_opponent": _text(last.get("game_opponent")),
+                     "team": _pitching_team(last),
+                     "Inning": last["Inning"],
                      "pitcher": last["Pitcher"], "throws": _text(last["PitcherThrows"])[:1], "pitches": len(p),
                      "sequence": seq,
                      "result": outcome_text(last["outcome"], last["TaggedHitType"]) if last["pa_end"] else ""})

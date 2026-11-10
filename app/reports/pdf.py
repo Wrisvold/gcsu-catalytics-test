@@ -453,6 +453,8 @@ def _draw_hitter_page2(c: Canvas, r: hitter_report.HitterReport, filters_note: s
                 y = _paragraph(c, y, "No pitches with a count.") - GAP
         y = _section(c, y, 6, "At-Bat Sequences" + ("" if first else " (continued)"),
                      f"{len(r.sequences)} plate appearances") - 2
+        if r.sequence_filter:
+            y = _paragraph(c, y, f"<b>{r.sequence_filter}</b>") - 2
         first = False
         table = rest.pop()
         if table is None:

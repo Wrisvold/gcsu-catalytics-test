@@ -127,6 +127,10 @@ PITCH_TYPES = {
     "KN": {"label": "Knuckleball", "color": "#7A7A7A"},
     "OT": {"label": "Other", "color": "#5D4037"},
 }
+# How pitch types read in the at-bat sequences (Walker, Nov 2026): "FB" for four-seams and sinkers, "CT"
+# for cutters; every other type keeps its code. FB is drawn in the four-seam color.
+SEQUENCE_CODES = {"FF": "FB", "SI": "FB", "FC": "CT"}
+SEQUENCE_COLOR_OF = {"SI": "FF"}  # draw these types in another type's color in the sequences
 # AutoPitchType text -> code. Lookups are case- and space-insensitive; anything unknown maps to OT.
 AUTO_PITCH_TYPE_MAP = {
     "four-seam": "FF", "fourseam": "FF", "fastball": "FF",

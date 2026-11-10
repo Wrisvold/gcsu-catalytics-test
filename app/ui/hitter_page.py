@@ -10,7 +10,7 @@ from charts import hitting as ch
 from charts.zone import zone_heatmap
 from metrics import hitting
 from reports import hitter as report
-from reports.context import pbp_note
+from reports.context import fmt_date, pbp_note
 from reports.tables import BREAKDOWN_COLS, HITTER_SPLIT_COLS
 from ui import decisions
 from ui.common import (
@@ -35,9 +35,10 @@ def render() -> None:
     if r is None:
         st.warning("This hitter saw no pitches in the selected games.")
         return
+    all_seq = _filter_at_bats(r)  # before the PDF buttons, so this report's PDF lists the same at-bats
     pdf_controls("hitter", r, df, f, len(roster))
     show(r)
-    show_page2(r)
+    show_page2(r, all_seq)
 
     section(7, "Scores", "1–100, from the coaches' scoring sheet")
     score_breakdown(r.grades)
@@ -84,9 +85,27 @@ def _code_html(code: str, color: str) -> str:
     return f'<b style="color:{color}">{escape(code)}</b>'
 
 
-def show_page2(r: report.HitterReport) -> None:
+def _at_bat_keys(r: report.HitterReport) -> tuple[str, str]:
+    return f"ab_teams_{r.hitter_id}", f"ab_dates_{r.hitter_id}"
+
+
+def _filter_at_bats(r: report.HitterReport):
+    """Apply the at-bat list's Team and Date filters (widgets drawn in section 6, read here from the
+    session first) to `r.sequences`. Returns the full list, for the filters' choices."""
+    all_seq = r.sequences
+    choices = (report.sequence_teams(all_seq), report.sequence_dates(all_seq))
+    picked = []
+    for key, options in zip(_at_bat_keys(r), choices):
+        kept = [v for v in st.session_state.get(key, []) if v in options]  # drop picks the date range removed
+        st.session_state[key] = kept
+        picked.append(kept)
+    r.sequences, r.sequence_filter = report.filter_sequences(all_seq, *picked)
+    return all_seq
+
+
+def show_page2(r: report.HitterReport, all_seq=None) -> None:
     """Sections 5 and 6 (page 2 of the PDF): the pitch mix in each count, then every plate appearance
-    pitch by pitch."""
+    pitch by pitch, with Team and Date filters when `all_seq` (the unfiltered list) is given."""
     section(5, "Pitch Mix by Count", "% of pitches seen in each count")
     types, mix = report.count_mix_rows(r.count_mix)
     if mix:
@@ -100,7 +119,18 @@ def show_page2(r: report.HitterReport) -> None:
     else:
         st.caption("No pitches with a count.")
 
-    section(6, "At-Bat Sequences", f"{len(r.sequences)} plate appearances")
+    section(6, "At-Bat Sequences", f"{len(r.sequences)} plate appearances"
+            + (f" of {len(all_seq)}" if all_seq is not None and len(all_seq) != len(r.sequences) else ""))
+    if all_seq is not None and not all_seq.empty:
+        team_key, date_key = _at_bat_keys(r)
+        c1, c2 = st.columns(2)
+        c1.multiselect("Team", report.sequence_teams(all_seq), key=team_key, placeholder="All teams",
+                       help="Only at-bats against these teams: GCSU, or the opponent entered on Game "
+                            "Context (TrackMan's team code when none is entered).")
+        c2.multiselect("Date", report.sequence_dates(all_seq), key=date_key, format_func=fmt_date,
+                       placeholder="All dates", help="Only at-bats from these games.")
+        st.caption("Leave both empty for every at-bat. This report's PDF lists the same at-bats; the team print "
+                   "file always lists them all.")
     rows = report.sequence_rows(r.sequences)
     if rows:
         head = "".join(f"<th>{h}</th>" for h in rows[0])

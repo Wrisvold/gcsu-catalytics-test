@@ -8,7 +8,7 @@ import pandas as pd
 import config
 from metrics import hitting, scores
 from metrics.common import ZoneGrid
-from reports.context import Scope, display_name, scope_of
+from reports.context import Scope, display_name, fmt_date, scope_of
 
 
 @dataclass
@@ -32,6 +32,7 @@ class HitterReport:
     count_mix: pd.DataFrame    # page 2: pitch-type % in each count
     score: scores.ScoreSummary
     clutch: scores.ScoreSummary
+    sequence_filter: str = ""  # page 2: which at-bats are listed, when the coach filtered them
 
     @property
     def grades(self) -> list[scores.ScoreSummary]:
@@ -49,8 +50,10 @@ SPLITS_NOTE = ("Velo tier = the pitcher's average fastball velo (four-seam and s
                "report. HH %, Avg EV and Max EV use tracked balls in play. BABIP = (H − HR) ÷ (AB − K − HR + SF).")
 
 
-SEQUENCE_NOTE = ("Each pitch is the count before it, then the pitch type. PA = his trip to the plate in that game "
-                 "(1 = first). Result uses the official scoring where the play-by-play is loaded.")
+SEQUENCE_NOTE = ("Each pitch is the count before it, then the pitch type (FB = four-seam or sinker, CT = cutter, "
+                 "SL slider, ST sweeper, CU curveball, CH changeup, FS splitter, KN knuckleball, OT other). PA = his "
+                 "trip to the plate in that game (1 = first). Result uses the official scoring where the "
+                 "play-by-play is loaded.")
 COUNT_MIX_NOTE = ("% of the pitches he saw in each count that were each pitch type (each row adds to 100%). The "
                   "count is balls-strikes before the pitch. Even includes 0-0; two strikes includes 3-2.")
 
@@ -108,14 +111,43 @@ def assemble(h: pd.DataFrame, hitter_id: str, name: str, score: scores.ScoreSumm
 # --- Page 2: at-bat sequences and pitch mix by count ---------------------------------------------
 
 def colored_sequence(seq: str, color_tag) -> str:
-    """The sequence text with each pitch code wrapped by `color_tag(code, color)` (HTML for the app,
-    ReportLab markup for the PDF). "0-0 FF, 0-1 SL" -> "0-0 <FF>, 0-1 <SL>"."""
+    """The sequence text with each pitch code shown as it reads in the sequences (config.SEQUENCE_CODES:
+    FB for four-seams and sinkers, CT for cutters) and wrapped by `color_tag(label, color)` (HTML for the
+    app, ReportLab markup for the PDF). "0-0 SI, 0-1 SL" -> "0-0 <FB>, 0-1 <SL>"."""
     out = []
     for item in seq.split(", ") if seq else []:
         count, _, code = item.rpartition(" ")
-        pt = config.PITCH_TYPES.get(code, config.PITCH_TYPES["OT"])
-        out.append(f"{count} {color_tag(code, pt['color'])}".strip())
+        label = config.SEQUENCE_CODES.get(code, code)
+        color_code = config.SEQUENCE_COLOR_OF.get(code, code)
+        pt = config.PITCH_TYPES.get(color_code, config.PITCH_TYPES["OT"])
+        out.append(f"{count} {color_tag(label, pt['color'])}".strip())
     return ", ".join(out)
+
+
+def sequence_teams(seq: pd.DataFrame) -> list[str]:
+    """The pitching teams in the at-bat list, for its Team filter."""
+    return sorted({t for t in seq["team"] if t}) if not seq.empty else []
+
+
+def sequence_dates(seq: pd.DataFrame) -> list[str]:
+    """The game dates in the at-bat list (ISO), newest first, for its Date filter."""
+    return sorted({d for d in seq["game_date"] if d}, reverse=True) if not seq.empty else []
+
+
+def filter_sequences(seq: pd.DataFrame, teams=(), dates=()) -> tuple[pd.DataFrame, str]:
+    """The at-bats against `teams` on `dates` (empty = all), and a note saying what was picked ("" for
+    every at-bat). PA numbers keep counting within each game, so a filtered list still says which trip
+    each one was."""
+    out = seq
+    parts = []
+    if teams:
+        out = out[out["team"].isin(teams)]
+        parts.append("vs " + ", ".join(teams))
+    if dates:
+        out = out[out["game_date"].isin(dates)]
+        parts.append("on " + ", ".join(fmt_date(d) for d in sorted(dates)))
+    note = f"Only at-bats {' '.join(parts)}." if parts else ""
+    return out, note
 
 
 def sequence_rows(seq: pd.DataFrame) -> list[dict]:
@@ -124,7 +156,7 @@ def sequence_rows(seq: pd.DataFrame) -> list[dict]:
     for r in seq.itertuples(index=False):
         hand = f" ({r.throws}HP)" if r.throws in ("R", "L") else ""
         d = pd.Timestamp(r.game_date) if r.game_date else None
-        rows.append({"Date": f"{d.month}/{d.day}" if d is not None else "—", "Opp": r.game_opponent or "—",
+        rows.append({"Date": f"{d.month}/{d.day}" if d is not None else "—", "Opp": r.team or "—",
                      "PA": str(r.pa_no), "Inn": "" if pd.isna(r.Inning) else str(int(r.Inning)),
                      "Pitcher": display_name(r.pitcher or "") + hand, "Sequence": r.sequence,
                      "Result": r.result or "—"})
